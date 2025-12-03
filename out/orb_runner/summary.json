@@ -1,0 +1,49 @@
+{
+  "found": true,
+  "iteration": 1,
+  "seed": 8,
+  "entries": [
+    {
+      "time": "2025-11-29 16:05:00+00:00",
+      "direction": "short",
+      "entry_price": 5009.75,
+      "stop_price": 5055.5,
+      "target_price": 4918.25,
+      "or_high": 5055.0,
+      "or_low": 5012.0,
+      "or_start": "2025-11-29 14:30:00+00:00",
+      "or_end": "2025-11-29 14:55:00+00:00"
+    }
+  ],
+  "outcomes": [
+    {
+      "entry": {
+        "time": "2025-11-29 16:05:00+00:00",
+        "direction": "short",
+        "entry_price": 5009.75,
+        "stop_price": 5055.5,
+        "target_price": 4918.25,
+        "or_high": 5055.0,
+        "or_low": 5012.0,
+        "or_start": "2025-11-29 14:30:00+00:00",
+        "or_end": "2025-11-29 14:55:00+00:00"
+      },
+      "hit_target": false,
+      "hit_stop": false,
+      "exit_time": "2025-11-29 20:05:00+00:00",
+      "r_multiple": -0.4262295081967213,
+      "mfe": 38.0,
+      "mae": -28.0
+    }
+  ],
+  "miss": {
+    "has_or_window": true,
+    "or_height": 43.0,
+    "drive_up": 0.0,
+    "drive_down": 24.75,
+    "up_rr": 0.0,
+    "down_rr": 0.5755813953488372,
+    "reason": "no_breakout_bar_found"
+  },
+  "summary": "found 1 entries on iteration 1 seed 8"
+}
