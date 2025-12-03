@@ -94,3 +94,9 @@ Thumbs.db
 # Project specific
 newprint.md  # Your code dump file
 continuous_contract.json  # Real data (keep private)
+.venv312/
+__pycache__/
+*.pyc
+.env
+.idea/
+.vscode/
