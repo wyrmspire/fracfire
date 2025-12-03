@@ -29,9 +29,11 @@ if PROJECT_ROOT not in sys.path:
 from lab.generators.price_generator import PhysicsConfig, PriceGenerator
 from src.evaluation.setups import (
     ORBConfig,
-    ORBOutcome,
-    summarize_orb_day,
+    summarize_orb_day_1m,
 )
+from src.evaluation.indicators import IndicatorConfig, add_1m_indicators, DecisionAnchorConfig
+from src.evaluation.models import SetupEntry, SetupOutcome
+from src.evaluation.trade_features import compute_trade_features, BadTradeConfig, inject_bad_trade_variants
 
 
 def generate_synth_1m_days(days: int, seed: int) -> pd.DataFrame:
@@ -84,12 +86,48 @@ def orb_trade_runner(
         seed = base_seed + i
         df_1m = generate_synth_1m_days(days_per_iter, seed)
         df_5m = resample_5m(df_1m)
+        df_1m_ind = add_1m_indicators(df_1m, IndicatorConfig())
 
-        entries, outcomes, miss = summarize_orb_day(df_5m, orb_cfg)
+        # Use 1m-based detection with 5-min decision anchors
+        entries, outcomes, miss = summarize_orb_day_1m(df_1m_ind, orb_cfg, DecisionAnchorConfig())
         last_miss = miss
 
         if entries:
             # For now we just take all entries in this sample; the agent can pick.
+            # Compute features for each outcome
+            features = []
+            try:
+                # Convert outcomes to SetupOutcome-like objects if needed
+                for o in outcomes:
+                    # Build a generic SetupEntry view
+                    e = o.entry
+                    entry = SetupEntry(
+                        time=e.time,
+                        direction=e.direction,
+                        kind="orb",
+                        entry_price=e.entry_price,
+                        stop_price=e.stop_price,
+                        target_price=e.target_price,
+                        context={
+                            "or_high": e.or_high,
+                            "or_low": e.or_low,
+                            "or_start": str(e.or_start),
+                            "or_end": str(e.or_end),
+                        },
+                    )
+                    so = SetupOutcome(
+                        entry=entry,
+                        hit_target=o.hit_target,
+                        hit_stop=o.hit_stop,
+                        exit_time=o.exit_time,
+                        r_multiple=o.r_multiple,
+                        mfe=o.mfe,
+                        mae=o.mae,
+                    )
+                    features.append(compute_trade_features(so, df_1m_ind))
+            except Exception:
+                features = []
+
             return {
                 "found": True,
                 "iteration": i,
@@ -99,6 +137,7 @@ def orb_trade_runner(
                 "miss": asdict(miss),
                 "df_1m": df_1m,
                 "df_5m": df_5m,
+                "features": features,
                 "summary": f"found {len(entries)} entries on iteration {i} seed {seed}",
             }
 
@@ -110,6 +149,7 @@ def orb_trade_runner(
             orb_cfg.max_counter_rr = min(1.0, orb_cfg.max_counter_rr * 1.1)
 
     # No trade found
+    # No trade found
     return {
         "found": False,
         "iteration": max_iterations,
@@ -119,6 +159,7 @@ def orb_trade_runner(
         "miss": asdict(last_miss) if last_miss is not None else None,
         "df_1m": df_1m,
         "df_5m": df_5m,
+        "features": [],
         "summary": "no entries found within max_iterations",
     }
 
@@ -138,6 +179,12 @@ def main() -> None:
     parser.add_argument("--max-counter-rr", type=float, default=0.3)
     parser.add_argument("--target-rr", type=float, default=2.0)
     parser.add_argument("--max-hold-bars", type=int, default=48)
+    # Bad trade injection knobs
+    parser.add_argument("--inject-hesitation", action="store_true", help="Inject hesitation variants")
+    parser.add_argument("--hesitation-minutes", type=int, default=5)
+    parser.add_argument("--inject-chase", action="store_true", help="Inject chase variants")
+    parser.add_argument("--chase-window-minutes", type=int, default=15)
+    parser.add_argument("--max-variants-per-trade", type=int, default=2)
 
     args = parser.parse_args()
 
@@ -166,12 +213,69 @@ def main() -> None:
     df_1m.to_csv(os.path.join(args.out_dir, "synthetic_1m.csv"))
     df_5m.to_csv(os.path.join(args.out_dir, "synthetic_5m.csv"))
 
+    # Inject bad trade variants if requested
+    feats = result.get("features", [])
+    outcomes_dicts = result.get("outcomes", [])
+    # Reconstruct SetupOutcome-like objects minimally for variants (use original entries)
+    outcomes_for_variants = []
+    try:
+        from dataclasses import asdict
+        for o in outcomes_dicts:
+            # Heuristic rebuild; runner already had full objects internally
+            pass
+    except Exception:
+        outcomes_for_variants = []
+
+    if args.inject_hesitation or args.inject_chase:
+        df_1m = result.get("df_1m")
+        if isinstance(df_1m, pd.DataFrame):
+            # We have to rebuild SetupOutcome objects from stored entries/outcomes in summary
+            rebuilt: list[SetupOutcome] = []
+            for e_dict, o_dict in zip(result.get("entries", []), result.get("outcomes", [])):
+                entry = SetupEntry(
+                    time=pd.Timestamp(e_dict["time"]),
+                    direction=e_dict["direction"],
+                    kind="orb",
+                    entry_price=e_dict["entry_price"],
+                    stop_price=e_dict["stop_price"],
+                    target_price=e_dict["target_price"],
+                    context={"or_high": e_dict["or_high"], "or_low": e_dict["or_low"]},
+                )
+                out = SetupOutcome(
+                    entry=entry,
+                    hit_target=o_dict["hit_target"],
+                    hit_stop=o_dict["hit_stop"],
+                    exit_time=pd.Timestamp(o_dict["exit_time"]),
+                    r_multiple=float(o_dict["r_multiple"]),
+                    mfe=float(o_dict["mfe"]),
+                    mae=float(o_dict["mae"]),
+                )
+                rebuilt.append(out)
+
+            bad_cfg = BadTradeConfig(
+                enable_hesitation=args.inject_hesitation,
+                hesitation_minutes=args.hesitation_minutes,
+                enable_chase=args.inject_chase,
+                chase_window_minutes=args.chase_window_minutes,
+                max_variants_per_trade=args.max_variants_per_trade,
+            )
+            variants = inject_bad_trade_variants(df_1m, rebuilt, bad_cfg)
+            # Append variant features
+            for vo in variants:
+                feats.append(compute_trade_features(vo, df_1m))
+
     # Save JSON summary
     json_summary: Dict[str, Any] = {
         k: v for k, v in result.items() if not isinstance(v, (pd.DataFrame,))
     }
+    json_summary["features"] = feats
     with open(os.path.join(args.out_dir, "summary.json"), "w", encoding="utf-8") as f:
         json.dump(json_summary, f, indent=2, default=str)
+
+    # Save features if present
+    feats = json_summary.get("features", [])
+    if feats:
+        pd.DataFrame(feats).to_csv(os.path.join(args.out_dir, "trades_features.csv"), index=False)
 
     print(json_summary["summary"])
 

@@ -12,6 +12,7 @@ from typing import List, Literal, Optional, Tuple
 import pandas as pd
 
 from .models import Direction, SetupEntry, SetupKind, SetupOutcome
+from .indicators import DecisionAnchorConfig, mark_decision_points_1m
 
 
 @dataclass
@@ -53,27 +54,10 @@ class LevelScalpConfig:
 
 @dataclass
 class ORBEntry:
-    """Detected ORB continuation entry and its parameters."""
-
-    time: pd.Timestamp
-    direction: Direction
-    kind: SetupKind = "orb"
-    entry_price: float
-    stop_price: float
-    target_price: float
-    or_high: float
-    or_low: float
-    or_start: pd.Timestamp
-    or_end: pd.Timestamp
-
-
-@dataclass
-class ORBEntry:
     """Internal ORB-specific view; converted to generic SetupEntry."""
 
     time: pd.Timestamp
     direction: Direction
-    kind: SetupKind = "orb"
     entry_price: float = 0.0
     stop_price: float = 0.0
     target_price: float = 0.0
@@ -81,6 +65,29 @@ class ORBEntry:
     or_low: float = 0.0
     or_start: Optional[pd.Timestamp] = None
     or_end: Optional[pd.Timestamp] = None
+    kind: SetupKind = "orb"
+
+
+@dataclass
+class ORBOutcome:
+    """Evaluation of a single ORB entry over future bars."""
+
+    entry: ORBEntry
+    hit_target: bool
+    hit_stop: bool
+    exit_time: pd.Timestamp
+    r_multiple: float  # realized R
+    mfe: float          # max favorable excursion in price (price distance)
+    mae: float          # max adverse excursion in price (price distance)
+
+
+@dataclass
+class ORBMissInfo:
+    """Diagnostics for ORB attempts that did not qualify as entries.
+
+    This helps explain *why* we didn't get a trade on a given day.
+    """
+
     has_or_window: bool
     or_height: float
     drive_up: float
@@ -383,7 +390,7 @@ def summarize_orb_day(
     - miss will always be populated to explain the no-trade or pre-trade context.
     """
 
-    from .setups import find_opening_orb_continuations  # type: ignore  # local import to avoid circular
+    from .library import find_opening_orb_continuations  # type: ignore  # local import to avoid circular
 
     if cfg is None:
         cfg = ORBConfig()
@@ -398,3 +405,280 @@ def summarize_orb_day(
             outcomes.append(outcome)
 
     return entries, outcomes, miss
+
+
+# 1m-based detection with 5-min decision anchors
+def find_opening_orb_continuations_1m(
+    df_1m: pd.DataFrame,
+    cfg: Optional[ORBConfig] = None,
+    anchor: Optional[DecisionAnchorConfig] = None,
+) -> List[ORBEntry]:
+    if cfg is None:
+        cfg = ORBConfig()
+    if anchor is None:
+        anchor = DecisionAnchorConfig()
+
+    df_1m = df_1m.sort_index().copy()
+
+    # OR window on 1m
+    first_ts = df_1m.index[0]
+    session_start = first_ts.replace(
+        hour=cfg.session_start_hour,
+        minute=cfg.session_start_minute,
+        second=0,
+        microsecond=0,
+    )
+    or_end = session_start + pd.Timedelta(minutes=cfg.or_minutes)
+    or_slice = df_1m[(df_1m.index >= session_start) & (df_1m.index < or_end)]
+    if or_slice.empty:
+        return []
+
+    or_high = float(or_slice["high"].max())
+    or_low = float(or_slice["low"].min())
+    or_start = or_slice.index[0]
+    or_end_ts = or_slice.index[-1]
+    or_height = or_high - or_low
+    if or_height <= 0:
+        return []
+
+    buffer = cfg.buffer_ticks * cfg.tick_size
+    closes = or_slice["close"]
+    drive_up = float(closes.max() - closes.iloc[0])
+    drive_down = float(closes.iloc[0] - closes.min())
+    up_rr = drive_up / or_height
+    down_rr = drive_down / or_height
+
+    direction: Optional[Direction] = None
+    if up_rr >= cfg.min_drive_rr and down_rr <= cfg.max_counter_rr:
+        direction = "long"
+    elif down_rr >= cfg.min_drive_rr and up_rr <= cfg.max_counter_rr:
+        direction = "short"
+    if direction is None:
+        return []
+
+    post_or = df_1m[df_1m.index > or_end_ts]
+    if post_or.empty:
+        return []
+
+    decision_marks = mark_decision_points_1m(post_or, anchor)
+    candidates = post_or[decision_marks]
+    if candidates.empty:
+        return []
+
+    if direction == "long":
+        trigger = candidates[candidates["close"] > or_high + buffer]
+    else:
+        trigger = candidates[candidates["close"] < or_low - buffer]
+    if trigger.empty:
+        return []
+
+    first_bar = trigger.iloc[0]
+    entry_time = trigger.index[0]
+    entry_price = float(first_bar["close"])
+
+    if direction == "long":
+        stop_price = or_low - buffer if cfg.stop_type == "or" else float(min(first_bar["low"], or_low)) - buffer
+        target_price = entry_price + cfg.target_rr * abs(entry_price - stop_price)
+    else:
+        stop_price = or_high + buffer if cfg.stop_type == "or" else float(max(first_bar["high"], or_high)) + buffer
+        target_price = entry_price - cfg.target_rr * abs(entry_price - stop_price)
+
+    return [
+        ORBEntry(
+            time=entry_time,
+            direction=direction,
+            entry_price=entry_price,
+            stop_price=stop_price,
+            target_price=target_price,
+            or_high=or_high,
+            or_low=or_low,
+            or_start=or_start,
+            or_end=or_end_ts,
+        )
+    ]
+
+
+def evaluate_orb_entry_1m(
+    df_1m: pd.DataFrame,
+    entry: ORBEntry,
+    cfg: Optional[ORBConfig] = None,
+) -> Optional[ORBOutcome]:
+    if cfg is None:
+        cfg = ORBConfig()
+    df_1m = df_1m.sort_index()
+    future = df_1m[df_1m.index > entry.time]
+    if future.empty:
+        return None
+
+    # Max hold in minutes approximated by 5m bars * 5
+    max_minutes = cfg.max_hold_bars * 5
+    future = future.iloc[: max_minutes]
+
+    hit_target = False
+    hit_stop = False
+    exit_time = future.index[-1]
+    mfe = 0.0
+    mae = 0.0
+
+    for ts, row in future.iterrows():
+        high = float(row["high"])
+        low = float(row["low"])
+
+        if entry.direction == "long":
+            mfe = max(mfe, high - entry.entry_price)
+            mae = min(mae, low - entry.entry_price)
+            if low <= entry.stop_price:
+                hit_stop = True
+                exit_time = ts
+                break
+            if high >= entry.target_price:
+                hit_target = True
+                exit_time = ts
+                break
+        else:
+            mfe = max(mfe, entry.entry_price - low)
+            mae = min(mae, entry.entry_price - high)
+            if high >= entry.stop_price:
+                hit_stop = True
+                exit_time = ts
+                break
+            if low <= entry.target_price:
+                hit_target = True
+                exit_time = ts
+                break
+
+    risk = abs(entry.entry_price - entry.stop_price)
+    if risk <= 0:
+        r_mult = 0.0
+    else:
+        if hit_target:
+            r_mult = cfg.target_rr
+        elif hit_stop:
+            r_mult = -1.0
+        else:
+            last_close = float(future.iloc[-1]["close"])
+            r_mult = ((last_close - entry.entry_price) / risk) if entry.direction == "long" else ((entry.entry_price - last_close) / risk)
+
+    return ORBOutcome(
+        entry=entry,
+        hit_target=hit_target,
+        hit_stop=hit_stop,
+        exit_time=exit_time,
+        r_multiple=r_mult,
+        mfe=mfe,
+        mae=mae,
+    )
+
+
+def summarize_orb_day_1m(
+    df_1m: pd.DataFrame,
+    cfg: Optional[ORBConfig] = None,
+    anchor: Optional[DecisionAnchorConfig] = None,
+) -> Tuple[List[ORBEntry], List[ORBOutcome], ORBMissInfo]:
+    if cfg is None:
+        cfg = ORBConfig()
+    if anchor is None:
+        anchor = DecisionAnchorConfig()
+
+    entries = find_opening_orb_continuations_1m(df_1m, cfg, anchor)
+    # For miss info, reuse 5m method logic by aggregating quickly if needed, or compute directly from 1m OR slice
+    miss = explain_orb_missing(df_1m.resample("5min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(), cfg)
+
+    outcomes: List[ORBOutcome] = []
+    for e in entries:
+        out = evaluate_orb_entry_1m(df_1m, e, cfg)
+        if out is not None:
+            outcomes.append(out)
+
+    return entries, outcomes, miss
+
+
+def evaluate_generic_entry_1m(
+    df_1m: pd.DataFrame,
+    entry: SetupEntry,
+    max_minutes: int = 240,
+) -> SetupOutcome:
+    """Evaluate a generic SetupEntry on 1m data.
+
+    Walk forward minute-by-minute up to max_minutes and determine
+    whether stop or target hits first; compute R, MFE/MAE.
+    """
+    df_1m = df_1m.sort_index()
+    future = df_1m[df_1m.index > entry.time]
+    if future.empty:
+        return SetupOutcome(
+            entry=entry,
+            hit_target=False,
+            hit_stop=False,
+            exit_time=entry.time,
+            r_multiple=0.0,
+            mfe=0.0,
+            mae=0.0,
+        )
+
+    future = future.iloc[: max_minutes]
+
+    hit_target = False
+    hit_stop = False
+    exit_time = future.index[-1]
+    mfe = 0.0
+    mae = 0.0
+
+    for ts, row in future.iterrows():
+        high = float(row["high"])
+        low = float(row["low"])
+
+        if entry.direction == "long":
+            mfe = max(mfe, high - entry.entry_price)
+            mae = min(mae, low - entry.entry_price)
+            if low <= entry.stop_price:
+                hit_stop = True
+                exit_time = ts
+                break
+            if high >= entry.target_price:
+                hit_target = True
+                exit_time = ts
+                break
+        else:
+            mfe = max(mfe, entry.entry_price - low)
+            mae = min(mae, entry.entry_price - high)
+            if high >= entry.stop_price:
+                hit_stop = True
+                exit_time = ts
+                break
+            if low <= entry.target_price:
+                hit_target = True
+                exit_time = ts
+                break
+
+    risk = abs(entry.entry_price - entry.stop_price)
+    if risk <= 0:
+        r_mult = 0.0
+    else:
+        if hit_target:
+            r_mult = (entry.target_price - entry.entry_price) / risk if entry.direction == "long" else (entry.entry_price - entry.target_price) / risk
+        elif hit_stop:
+            r_mult = -1.0
+        else:
+            last_close = float(future.iloc[-1]["close"])
+            r_mult = ((last_close - entry.entry_price) / risk) if entry.direction == "long" else ((entry.entry_price - last_close) / risk)
+
+    return SetupOutcome(
+        entry=entry,
+        hit_target=hit_target,
+        hit_stop=hit_stop,
+        exit_time=exit_time,
+        r_multiple=r_mult,
+        mfe=mfe,
+        mae=mae,
+    )
+
+
+def run_orb_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
+    """
+    Wrapper to run ORB setup detection and return a list of outcomes.
+    Compatible with the engine's expectation.
+    """
+    cfg = ORBConfig(**kwargs)
+    _, outcomes, _ = summarize_orb_day(df_5m, cfg)
+    return outcomes  # type: ignore

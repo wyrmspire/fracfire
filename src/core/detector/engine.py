@@ -7,7 +7,7 @@ import pandas as pd
 
 from .indicators import IndicatorConfig, add_5m_indicators
 from .models import SetupOutcome
-from . import setups
+from . import library
 
 
 @dataclass
@@ -42,23 +42,23 @@ def run_setups(
 
     if cfg.orb.enabled:
         outcomes.extend(
-            setups.run_orb_family(df_5m_ind, **cfg.orb.params)
+            library.run_orb_family(df_5m_ind, **cfg.orb.params)
         )
 
     # Placeholders for future families; they can be wired in as implemented
-    if cfg.level_scalp.enabled and hasattr(setups, "run_level_scalp_family"):
+    if cfg.level_scalp.enabled and hasattr(library, "run_level_scalp_family"):
         outcomes.extend(
-            setups.run_level_scalp_family(df_5m_ind, **cfg.level_scalp.params)
+            library.run_level_scalp_family(df_5m_ind, **cfg.level_scalp.params)
         )
 
-    if cfg.ema20_vwap_revert.enabled and hasattr(setups, "run_ema20_vwap_revert_family"):
+    if cfg.ema20_vwap_revert.enabled and hasattr(library, "run_ema20_vwap_revert_family"):
         outcomes.extend(
-            setups.run_ema20_vwap_revert_family(df_5m_ind, **cfg.ema20_vwap_revert.params)
+            library.run_ema20_vwap_revert_family(df_5m_ind, **cfg.ema20_vwap_revert.params)
         )
 
-    if cfg.ema200_continuation.enabled and hasattr(setups, "run_ema200_continuation_family"):
+    if cfg.ema200_continuation.enabled and hasattr(library, "run_ema200_continuation_family"):
         outcomes.extend(
-            setups.run_ema200_continuation_family(df_5m_ind, **cfg.ema200_continuation.params)
+            library.run_ema200_continuation_family(df_5m_ind, **cfg.ema200_continuation.params)
         )
 
     return outcomes

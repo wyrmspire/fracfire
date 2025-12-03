@@ -20,8 +20,8 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from lab.generators.price_generator import PhysicsConfig, PriceGenerator
-from src.evaluation.setups import (
+from src.core.generator.engine import PhysicsConfig, PriceGenerator
+from src.core.detector.library import (
     ORBConfig,
     evaluate_orb_entry,
     find_opening_orb_continuations,
