@@ -66,19 +66,34 @@ def overlay_trades(ax: plt.Axes, df: pd.DataFrame, entries: List[Dict[str, Any]]
         if outcome is None:
             status = "open"
             r_text = "R=?"
+            # Default to 30 minutes for open trades
+            exit_ts = ts + pd.Timedelta(minutes=30)
         else:
             hit_t = outcome.get("hit_target", False)
             hit_s = outcome.get("hit_stop", False)
             status = "win" if hit_t else ("loss" if hit_s else "open")
             r_text = f"R={float(outcome.get('r_multiple', 0.0)):.2f}"
+            exit_ts = pd.Timestamp(outcome.get("exit_time", ts + pd.Timedelta(minutes=30)))
 
-        ax.scatter([ts], [entry_price], color=COLOR_ENTRY[status], s=40, label=None)
-        # plot stop/target lines for +/- 30 minutes
-        left = ts - pd.Timedelta(minutes=30)
-        right = ts + pd.Timedelta(minutes=30)
-        ax.hlines(stop_price, xmin=left, xmax=right, colors="#e74c3c", linestyles="dashed", linewidth=1)
-        ax.hlines(target_price, xmin=left, xmax=right, colors="#2ecc71", linestyles="dashed", linewidth=1)
-        ax.text(ts, entry_price, f"{kind}\n{r_text}", fontsize=8, color="#2c3e50")
+        # Entry marker
+        ax.scatter([ts], [entry_price], color=COLOR_ENTRY[status], s=40, label=None, zorder=5)
+        
+        # Draw stop/target lines only for trade duration
+        ax.hlines(stop_price, xmin=ts, xmax=exit_ts, colors="#e74c3c", linestyles="dashed", linewidth=1.5, zorder=3)
+        ax.hlines(target_price, xmin=ts, xmax=exit_ts, colors="#2ecc71", linestyles="dashed", linewidth=1.5, zorder=3)
+        
+        # Add shaded boxes: red for stop loss zone, green for profit zone
+        stop_zone_bottom = min(entry_price, stop_price)
+        stop_zone_top = max(entry_price, stop_price)
+        ax.fill_between([ts, exit_ts], stop_zone_bottom, stop_zone_top,
+                       color="#e74c3c", alpha=0.15, zorder=1, label="_nolegend_")
+        
+        profit_zone_bottom = min(entry_price, target_price)
+        profit_zone_top = max(entry_price, target_price)
+        ax.fill_between([ts, exit_ts], profit_zone_bottom, profit_zone_top,
+                       color="#2ecc71", alpha=0.15, zorder=1, label="_nolegend_")
+        
+        ax.text(ts, entry_price, f"{kind}\n{r_text}", fontsize=8, color="#2c3e50", zorder=6)
 
 
 def main() -> None:
