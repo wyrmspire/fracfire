@@ -45,6 +45,12 @@ from src.core.detector.library import (
 )
 from src.core.detector.features import evaluate_generic_entry_1m
 from src.core.detector.models import SetupEntry, SetupOutcome
+from src.core.visualization import (
+    COLORS,
+    add_trade_zones_matplotlib,
+    add_trade_lines_matplotlib,
+    get_entry_marker_color,
+)
 
 
 def generate_synth_1m(days: int, seed: int) -> pd.DataFrame:
@@ -176,9 +182,10 @@ def plot_5m_with_trades(df_5m: pd.DataFrame, outcomes: List[SetupOutcome], title
     # Wick and body
     for ts, row in df_5m.iterrows():
         o = float(row["open"]) ; c = float(row["close"]) ; h = float(row["high"]) ; l = float(row["low"]) 
-        color = "#26a69a" if c >= o else "#ef5350"
-        ax.vlines(ts, l, h, color="#666", linewidth=1)
+        color = COLORS["candle_up"] if c >= o else COLORS["candle_down"]
+        ax.vlines(ts, l, h, color=COLORS["candle_wick"], linewidth=1)
         ax.vlines(ts, min(o, c), max(o, c), color=color, linewidth=4)
+    
     # Overlay trades with shaded boxes and duration-limited lines
     for out in outcomes:
         e = out.entry
@@ -186,24 +193,12 @@ def plot_5m_with_trades(df_5m: pd.DataFrame, outcomes: List[SetupOutcome], title
         exit_ts = pd.Timestamp(out.exit_time)
         
         # Entry marker
-        ax.scatter([entry_ts], [e.entry_price], color=("#27ae60" if out.r_multiple>0 else "#c0392b"), s=60, zorder=5)
+        marker_color = get_entry_marker_color(out.r_multiple)
+        ax.scatter([entry_ts], [e.entry_price], color=marker_color, s=60, zorder=5)
         
-        # Draw SL/TP lines only for trade duration (entry to exit)
-        ax.hlines(e.stop_price, xmin=entry_ts, xmax=exit_ts, colors="#e74c3c", linestyles="dashed", linewidth=1.5, zorder=3)
-        ax.hlines(e.target_price, xmin=entry_ts, xmax=exit_ts, colors="#2ecc71", linestyles="dashed", linewidth=1.5, zorder=3)
-        
-        # Add shaded boxes: red for stop loss zone, green for profit zone
-        # Stop loss zone (between entry and stop)
-        stop_zone_bottom = min(e.entry_price, e.stop_price)
-        stop_zone_top = max(e.entry_price, e.stop_price)
-        ax.fill_between([entry_ts, exit_ts], stop_zone_bottom, stop_zone_top, 
-                        color="#ef5350", alpha=0.15, zorder=1, label="_nolegend_")
-        
-        # Profit zone (between entry and target)
-        profit_zone_bottom = min(e.entry_price, e.target_price)
-        profit_zone_top = max(e.entry_price, e.target_price)
-        ax.fill_between([entry_ts, exit_ts], profit_zone_bottom, profit_zone_top, 
-                        color="#26a69a", alpha=0.15, zorder=1, label="_nolegend_")
+        # Add shaded zones and lines using shared utilities
+        add_trade_zones_matplotlib(ax, entry_ts, exit_ts, e.entry_price, e.stop_price, e.target_price, zorder=1)
+        add_trade_lines_matplotlib(ax, entry_ts, exit_ts, e.stop_price, e.target_price, zorder=3)
         
         # Label with setup kind and R-multiple
         ax.text(entry_ts, e.entry_price, f"{e.kind}\nR={out.r_multiple:.2f}", fontsize=8, color="#2c3e50", zorder=6)

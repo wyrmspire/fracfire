@@ -9,19 +9,24 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import sys
 from typing import List, Dict, Any
 
 import pandas as pd
 import matplotlib.pyplot as plt
 
-COLOR_UP = "#2ecc71"
-COLOR_DN = "#e74c3c"
-COLOR_BODY = "#34495e"
-COLOR_ENTRY = {
-    "win": "#27ae60",
-    "loss": "#c0392b",
-    "open": "#f1c40f",
-}
+# Add project root to path
+PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
+if PROJECT_ROOT not in sys.path:
+    sys.path.insert(0, PROJECT_ROOT)
+
+from src.core.visualization import (
+    COLORS,
+    add_trade_zones_matplotlib,
+    add_trade_lines_matplotlib,
+    get_exit_time_or_fallback,
+    get_entry_marker_color,
+)
 
 
 def load_scenario(data_dir: str) -> tuple[pd.DataFrame, Dict[str, Any]]:
@@ -40,11 +45,11 @@ def plot_candles(ax: plt.Axes, df: pd.DataFrame) -> None:
         c = float(row["close"]) if "close" in row else o
         h = float(row.get("high", max(o, c)))
         l = float(row.get("low", min(o, c)))
-        color = COLOR_UP if c >= o else COLOR_DN
+        color = COLORS["candle_up"] if c >= o else COLORS["candle_down"]
         # wick
         ax.plot([ts, ts], [l, h], color=color, linewidth=1)
         # body
-        ax.plot([ts, ts], [o, c], color=COLOR_BODY, linewidth=4)
+        ax.plot([ts, ts], [o, c], color="#34495e", linewidth=4)
 
 
 def overlay_trades(ax: plt.Axes, df: pd.DataFrame, entries: List[Dict[str, Any]], outcomes: List[Dict[str, Any]]) -> None:
@@ -54,46 +59,40 @@ def overlay_trades(ax: plt.Axes, df: pd.DataFrame, entries: List[Dict[str, Any]]
         outcome_by_time[pd.Timestamp(o["entry"]["time"])] = o
 
     for e in entries:
-        ts = pd.Timestamp(e["time"])
-        entry_price = float(e["entry_price"]) if "entry_price" in e else float(df.loc[ts, "close"]) if ts in df.index else None
+        entry_ts = pd.Timestamp(e["time"])
+        entry_price = float(e["entry_price"]) if "entry_price" in e else float(df.loc[entry_ts, "close"]) if entry_ts in df.index else None
         if entry_price is None:
             continue
         stop_price = float(e.get("stop_price", entry_price))
         target_price = float(e.get("target_price", entry_price))
         kind = e.get("kind", "orb")
 
-        outcome = outcome_by_time.get(ts)
+        outcome = outcome_by_time.get(entry_ts)
         if outcome is None:
-            status = "open"
+            is_open = True
+            r_multiple = 0.0
             r_text = "R=?"
-            # Default to 30 minutes for open trades
-            exit_ts = ts + pd.Timedelta(minutes=30)
+            exit_time_value = None
         else:
             hit_t = outcome.get("hit_target", False)
             hit_s = outcome.get("hit_stop", False)
-            status = "win" if hit_t else ("loss" if hit_s else "open")
-            r_text = f"R={float(outcome.get('r_multiple', 0.0)):.2f}"
-            exit_ts = pd.Timestamp(outcome.get("exit_time", ts + pd.Timedelta(minutes=30)))
+            is_open = not (hit_t or hit_s)
+            r_multiple = float(outcome.get('r_multiple', 0.0))
+            r_text = f"R={r_multiple:.2f}"
+            exit_time_value = outcome.get("exit_time")
+        
+        # Get exit time with fallback
+        exit_ts = get_exit_time_or_fallback(entry_ts, exit_time_value)
 
-        # Entry marker
-        ax.scatter([ts], [entry_price], color=COLOR_ENTRY[status], s=40, label=None, zorder=5)
+        # Entry marker with appropriate color
+        marker_color = get_entry_marker_color(r_multiple, is_open)
+        ax.scatter([entry_ts], [entry_price], color=marker_color, s=40, label=None, zorder=5)
         
-        # Draw stop/target lines only for trade duration
-        ax.hlines(stop_price, xmin=ts, xmax=exit_ts, colors="#e74c3c", linestyles="dashed", linewidth=1.5, zorder=3)
-        ax.hlines(target_price, xmin=ts, xmax=exit_ts, colors="#2ecc71", linestyles="dashed", linewidth=1.5, zorder=3)
+        # Add shaded zones and lines using shared utilities
+        add_trade_zones_matplotlib(ax, entry_ts, exit_ts, entry_price, stop_price, target_price, zorder=1)
+        add_trade_lines_matplotlib(ax, entry_ts, exit_ts, stop_price, target_price, zorder=3)
         
-        # Add shaded boxes: red for stop loss zone, green for profit zone
-        stop_zone_bottom = min(entry_price, stop_price)
-        stop_zone_top = max(entry_price, stop_price)
-        ax.fill_between([ts, exit_ts], stop_zone_bottom, stop_zone_top,
-                       color="#e74c3c", alpha=0.15, zorder=1, label="_nolegend_")
-        
-        profit_zone_bottom = min(entry_price, target_price)
-        profit_zone_top = max(entry_price, target_price)
-        ax.fill_between([ts, exit_ts], profit_zone_bottom, profit_zone_top,
-                       color="#2ecc71", alpha=0.15, zorder=1, label="_nolegend_")
-        
-        ax.text(ts, entry_price, f"{kind}\n{r_text}", fontsize=8, color="#2c3e50", zorder=6)
+        ax.text(entry_ts, entry_price, f"{kind}\n{r_text}", fontsize=8, color="#2c3e50", zorder=6)
 
 
 def main() -> None:

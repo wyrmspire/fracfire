@@ -29,6 +29,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.core.generator.engine import PhysicsConfig, PriceGenerator
 from src.core.detector.indicators import IndicatorConfig, add_5m_indicators
+from src.core.visualization import COLORS, get_exit_time_or_fallback
 
 
 def generate_synth_1m(days: int, seed: int) -> pd.DataFrame:
@@ -69,8 +70,8 @@ def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, ou
     # Overlay trades with shaded boxes and duration-limited lines
     for _, r in trades.iterrows():
         entry_time = pd.to_datetime(r["time"])
-        # Use exit_time if available, otherwise estimate 60 minutes
-        exit_time = pd.to_datetime(r["exit_time"]) if "exit_time" in r and not pd.isna(r["exit_time"]) else entry_time + pd.Timedelta(minutes=60)
+        # Use shared utility for consistent fallback handling
+        exit_time = get_exit_time_or_fallback(entry_time, r.get("exit_time"))
         
         entry = float(r["entry"])
         stop = float(r["stop"]) if not pd.isna(r["stop"]) else None
@@ -78,28 +79,28 @@ def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, ou
         r_multiple = float(r["R"])
         color = "green" if r_multiple > 0 else "red"
         
-        # Add shaded profit zone (green)
+        # Add shaded profit zone (green) - using consistent colors
         if target is not None:
             profit_zone_y = [min(entry, target), max(entry, target)]
             fig.add_trace(go.Scatter(
                 x=[entry_time, exit_time, exit_time, entry_time, entry_time],
                 y=[profit_zone_y[0], profit_zone_y[0], profit_zone_y[1], profit_zone_y[1], profit_zone_y[0]],
                 fill="toself",
-                fillcolor="rgba(38, 166, 154, 0.15)",  # Green with transparency
+                fillcolor=f"rgba(38, 166, 154, {COLORS['profit_fill_alpha']})",  # Consistent with matplotlib
                 line=dict(width=0),
                 showlegend=False,
                 hoverinfo="skip",
                 name="_profit_zone"
             ))
         
-        # Add shaded stop loss zone (red)
+        # Add shaded stop loss zone (red) - using consistent colors
         if stop is not None:
             stop_zone_y = [min(entry, stop), max(entry, stop)]
             fig.add_trace(go.Scatter(
                 x=[entry_time, exit_time, exit_time, entry_time, entry_time],
                 y=[stop_zone_y[0], stop_zone_y[0], stop_zone_y[1], stop_zone_y[1], stop_zone_y[0]],
                 fill="toself",
-                fillcolor="rgba(239, 83, 80, 0.15)",  # Red with transparency
+                fillcolor=f"rgba(239, 83, 80, {COLORS['stop_fill_alpha']})",  # Consistent with matplotlib
                 line=dict(width=0),
                 showlegend=False,
                 hoverinfo="skip",
@@ -112,7 +113,7 @@ def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, ou
                 x=[entry_time, exit_time], 
                 y=[stop, stop], 
                 mode="lines",
-                line=dict(color="firebrick", dash="dash", width=2),
+                line=dict(color=COLORS["stop_line"], dash="dash", width=2),
                 showlegend=False,
                 hovertext=f"Stop Loss: {stop:.2f}",
                 name="_stop_line"
@@ -122,7 +123,7 @@ def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, ou
                 x=[entry_time, exit_time], 
                 y=[target, target], 
                 mode="lines",
-                line=dict(color="green", dash="dash", width=2),
+                line=dict(color=COLORS["profit_line"], dash="dash", width=2),
                 showlegend=False,
                 hovertext=f"Take Profit: {target:.2f}",
                 name="_target_line"
