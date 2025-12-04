@@ -219,6 +219,7 @@ def main(argv=None) -> None:
     parser.add_argument('--week-timeframes', type=str, default='4H,4min', help='Comma-separated resample timeframes for week charts (e.g., "4H,4min")')
     parser.add_argument('--quarter-timeframes', type=str, default='1D,15min', help='Comma-separated resample timeframes for quarter charts (e.g., "1D,15min")')
     parser.add_argument('--week-start', type=str, default=None, help='Optional ISO date (YYYY-MM-DD) to anchor the week window (uses data around this date)')
+    parser.add_argument('--n-runs', type=int, default=1, help='Number of randomized runs to perform (loop through windows)')
 
     # Physics knobs (only a subset exposed for quick dialing)
     parser.add_argument('--base-volatility', type=float, default=None)
@@ -246,19 +247,12 @@ def main(argv=None) -> None:
     real_1m_ohlcv = real_1m[["open", "high", "low", "close", "volume"]]
 
     # Optionally anchor the week window around a specific calendar date
-    if args.week_start:
-        anchor = pd.Timestamp(args.week_start, tz='UTC')
-        half_span = pd.Timedelta(days=args.week_days // 2)
-        start = anchor - half_span
-        end = start + pd.Timedelta(days=args.week_days)
-        real_slice = real_1m_ohlcv.loc[start:end]
-        if len(real_slice) == 0:
-            raise ValueError(f"No real data found around week_start={args.week_start}")
-        real_week_1m = real_slice.copy()
-        # Quarter window still selected by the generic helper
-        _, real_quarter_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
-    else:
-        real_week_1m, real_quarter_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
+    # Support multiple runs: loop and pick different windows each run
+    n_runs = max(1, int(args.n_runs))
+
+    # Storage for run summaries
+    import json
+    run_summaries = []
 
     physics_overrides = dict(
         base_volatility=args.base_volatility,
@@ -273,45 +267,90 @@ def main(argv=None) -> None:
         wick_extension_avg=args.wick_extension_avg,
     )
 
-    synth_week_1m = generate_synthetic_matching(real_week_1m, args.seed_week, physics_overrides=physics_overrides)
-    synth_quarter_1m = generate_synthetic_matching(real_quarter_1m, args.seed_quarter, physics_overrides=physics_overrides)
+    for run_idx in range(n_runs):
+        # For reproducibility across runs, offset seeds by run index
+        seed_week = args.seed_week + run_idx * 1000
+        seed_quarter = args.seed_quarter + run_idx * 1000
 
-    # Aggregate to 5m and 15m; we do NOT plot 1m
-    real_week_5m = resample_ohlcv(real_week_1m, "5min")
-    real_week_15m = resample_ohlcv(real_week_1m, "15min")
-    synth_week_5m = resample_ohlcv(synth_week_1m, "5min")
-    synth_week_15m = resample_ohlcv(synth_week_1m, "15min")
+        if args.week_start and n_runs == 1:
+            anchor = pd.Timestamp(args.week_start, tz='UTC')
+            half_span = pd.Timedelta(days=args.week_days // 2)
+            start = anchor - half_span
+            end = start + pd.Timedelta(days=args.week_days)
+            real_slice = real_1m_ohlcv.loc[start:end]
+            if len(real_slice) == 0:
+                raise ValueError(f"No real data found around week_start={args.week_start}")
+            real_week_1m = real_slice.copy()
+            _, real_quarter_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
+        else:
+            real_week_1m, real_quarter_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
 
-    # For the 3-month window, aggregate to daily so candles are clearly visible
-    real_quarter_daily = resample_ohlcv(real_quarter_1m, "1D")
-    synth_quarter_daily = resample_ohlcv(synth_quarter_1m, "1D")
+        synth_week_1m = generate_synthetic_matching(real_week_1m, seed_week, physics_overrides=physics_overrides)
+        synth_quarter_1m = generate_synthetic_matching(real_quarter_1m, seed_quarter, physics_overrides=physics_overrides)
 
-    out_dir = Path(args.out_dir)
-    out_dir.mkdir(parents=True, exist_ok=True)
+        # Aggregate to 5m and 15m; we do NOT plot 1m
+        real_week_5m = resample_ohlcv(real_week_1m, "5min")
+        real_week_15m = resample_ohlcv(real_week_1m, "15min")
+        synth_week_5m = resample_ohlcv(synth_week_1m, "5min")
+        synth_week_15m = resample_ohlcv(synth_week_1m, "15min")
 
-    # Week charts: support multiple timeframes supplied by the user
-    week_timeframes = [t.strip() for t in args.week_timeframes.split(',') if t.strip()]
-    for tf in week_timeframes:
-        real_week_tf = resample_ohlcv(real_week_1m, tf)
-        synth_week_tf = resample_ohlcv(synth_week_1m, tf)
-        stats_real = compute_wick_stats(real_week_tf)
-        stats_synth = compute_wick_stats(synth_week_tf)
-        print(f"Week {tf} stats REAL: {stats_real}")
-        print(f"Week {tf} stats SYNTH: {stats_synth}")
-        filename = out_dir / f"gen_compare_week_{tf.replace('%','').replace(':','').replace('/','_')}.png"
-        plot_pair(real_week_tf, synth_week_tf, title=f"1-Week {tf}", filename=str(filename))
+        # For the 3-month window, aggregate to daily so candles are clearly visible
+        real_quarter_daily = resample_ohlcv(real_quarter_1m, "1D")
+        synth_quarter_daily = resample_ohlcv(synth_quarter_1m, "1D")
 
-    # Quarter charts: support multiple timeframes
-    quarter_timeframes = [t.strip() for t in args.quarter_timeframes.split(',') if t.strip()]
-    for tf in quarter_timeframes:
-        real_q_tf = resample_ohlcv(real_quarter_1m, tf)
-        synth_q_tf = resample_ohlcv(synth_quarter_1m, tf)
-        stats_real = compute_wick_stats(real_q_tf)
-        stats_synth = compute_wick_stats(synth_q_tf)
-        print(f"Quarter {tf} stats REAL: {stats_real}")
-        print(f"Quarter {tf} stats SYNTH: {stats_synth}")
-        filename = out_dir / f"gen_compare_quarter_{tf.replace('%','').replace(':','').replace('/','_')}.png"
-        plot_pair(real_q_tf, synth_q_tf, title=f"Quarter {tf}", filename=str(filename))
+        out_dir = Path(args.out_dir)
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        # Week charts: support multiple timeframes supplied by the user
+        week_timeframes = [t.strip() for t in args.week_timeframes.split(',') if t.strip()]
+        for tf in week_timeframes:
+            real_week_tf = resample_ohlcv(real_week_1m, tf)
+            synth_week_tf = resample_ohlcv(synth_week_1m, tf)
+            stats_real = compute_wick_stats(real_week_tf)
+            stats_synth = compute_wick_stats(synth_week_tf)
+            print(f"Run {run_idx} - Week {tf} stats REAL: {stats_real}")
+            print(f"Run {run_idx} - Week {tf} stats SYNTH: {stats_synth}")
+            filename = out_dir / f"run{run_idx:02d}_gen_compare_week_{tf.replace('%','').replace(':','').replace('/','_')}.png"
+            plot_pair(real_week_tf, synth_week_tf, title=f"Run {run_idx} - 1-Week {tf}", filename=str(filename))
+
+            run_summaries.append({
+                'run': run_idx,
+                'window': 'week',
+                'timeframe': tf,
+                'seed_week': seed_week,
+                'stats_real': json.dumps(stats_real),
+                'stats_synth': json.dumps(stats_synth),
+            })
+
+        # Quarter charts: support multiple timeframes
+        quarter_timeframes = [t.strip() for t in args.quarter_timeframes.split(',') if t.strip()]
+        for tf in quarter_timeframes:
+            real_q_tf = resample_ohlcv(real_quarter_1m, tf)
+            synth_q_tf = resample_ohlcv(synth_quarter_1m, tf)
+            stats_real = compute_wick_stats(real_q_tf)
+            stats_synth = compute_wick_stats(synth_q_tf)
+            print(f"Run {run_idx} - Quarter {tf} stats REAL: {stats_real}")
+            print(f"Run {run_idx} - Quarter {tf} stats SYNTH: {stats_synth}")
+            filename = out_dir / f"run{run_idx:02d}_gen_compare_quarter_{tf.replace('%','').replace(':','').replace('/','_')}.png"
+            plot_pair(real_q_tf, synth_q_tf, title=f"Run {run_idx} - Quarter {tf}", filename=str(filename))
+
+            run_summaries.append({
+                'run': run_idx,
+                'window': 'quarter',
+                'timeframe': tf,
+                'seed_quarter': seed_quarter,
+                'stats_real': json.dumps(stats_real),
+                'stats_synth': json.dumps(stats_synth),
+            })
+
+    # Save run summaries
+    try:
+        summary_df = pd.DataFrame(run_summaries)
+        summary_csv = out_dir / 'generator_compare_runs_summary.csv'
+        summary_df.to_csv(summary_csv, index=False)
+        print(f"Saved summary to {summary_csv}")
+    except Exception as e:
+        print(f"Warning: failed to save summary CSV: {e}")
 
     print("Done.")
 

@@ -70,7 +70,7 @@ def overlay_trades(ax: plt.Axes, df: pd.DataFrame, entries: List[Dict[str, Any]]
             hit_t = outcome.get("hit_target", False)
             hit_s = outcome.get("hit_stop", False)
             status = "win" if hit_t else ("loss" if hit_s else "open")
-            r_text = f"R={float(outcome.get("r_multiple", 0.0)):.2f}"
+            r_text = f"R={float(outcome.get('r_multiple', 0.0)):.2f}"
 
         ax.scatter([ts], [entry_price], color=COLOR_ENTRY[status], s=40, label=None)
         # plot stop/target lines for +/- 30 minutes

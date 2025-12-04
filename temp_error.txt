@@ -1,0 +1,9 @@
+Traceback (most recent call last):
+  File "C:\fracfire\scripts\backend_console.py", line 128, in <module>
+    main()
+  File "C:\fracfire\scripts\backend_console.py", line 47, in main
+    handle_run(args)
+  File "C:\fracfire\scripts\backend_console.py", line 86, in handle_run
+    start_time=datetime(2024, 1, 1, 9, 30) + (day * timedelta(days=1)) # Just shifting start time
+                                                    ^^^^^^^^^
+NameError: name 'timedelta' is not defined
