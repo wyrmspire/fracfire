@@ -1,3 +1,4 @@
+# -*- coding: utf-8 -*-
 """
 Quick Test Script - Verify Installation and Basic Functionality
 
@@ -23,7 +24,7 @@ try:
     import numpy as np
     import pandas as pd
     import matplotlib.pyplot as plt
-    print("✓ Core dependencies (numpy, pandas, matplotlib) OK")
+    print("[OK] Core dependencies (numpy, pandas, matplotlib) OK")
 except ImportError as e:
     print(f"✗ Missing dependency: {e}")
     sys.exit(1)
@@ -33,7 +34,7 @@ print("\n[2/6] Testing core modules...")
 try:
     from src.core.generator import PriceGenerator, MarketState
     from src.core.generator.utils import summarize_day, print_summary
-    print("✓ Core generator module OK")
+    print("[OK] Core generator module OK")
 except ImportError as e:
     print(f"✗ Failed to import core modules: {e}")
     sys.exit(1)
@@ -53,7 +54,7 @@ try:
         bars.append(bar)
     
     df = pd.DataFrame(bars)
-    print(f"✓ Generated {len(df)} bars successfully")
+    print(f"[OK] Generated {len(df)} bars successfully")
     print(f"  Price range: {df['low'].min():.2f} - {df['high'].max():.2f}")
     print(f"  Columns: {', '.join(df.columns[:8])}...")
 except Exception as e:
@@ -77,7 +78,7 @@ try:
     assert all(df['low'] % 0.25 == 0)
     assert all(df['close'] % 0.25 == 0)
     
-    print("✓ Tick-based features OK")
+    print("[OK] Tick-based features OK")
     print(f"  Avg delta_ticks: {df['delta_ticks'].mean():.2f}")
     print(f"  Avg range_ticks: {df['range_ticks'].mean():.2f}")
 except AssertionError as e:
@@ -99,7 +100,7 @@ try:
     assert 'by_state' in summary
     assert 'by_session' in summary
     
-    print("✓ Analysis utilities OK")
+    print("[OK] Analysis utilities OK")
     print(f"  States found: {len(summary['by_state'])}")
     print(f"  Sessions found: {len(summary['by_session'])}")
 except Exception as e:
@@ -129,7 +130,7 @@ try:
     if missing_dirs:
         print(f"✗ Missing directories: {', '.join(missing_dirs)}")
     else:
-        print("✓ Directory structure OK")
+        print("[OK] Directory structure OK")
 except Exception as e:
     print(f"✗ Directory check failed: {e}")
 
@@ -137,7 +138,7 @@ except Exception as e:
 print("\n" + "=" * 70)
 print("INSTALLATION TEST COMPLETE")
 print("=" * 70)
-print("\n✅ All tests passed! Your environment is ready.")
+print("\n[SUCCESS] All tests passed! Your environment is ready.")
 print("\nNext steps:")
 print("  1. Review docs/PROJECT_MANAGEMENT.md for roadmap")
 print("  2. Run: python scripts/demo_price_generation.py")
