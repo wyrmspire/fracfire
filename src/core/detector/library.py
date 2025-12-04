@@ -682,3 +682,655 @@ def run_orb_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
     cfg = ORBConfig(**kwargs)
     _, outcomes, _ = summarize_orb_day(df_5m, cfg)
     return outcomes  # type: ignore
+
+
+# ============================================================================
+# EMA200 CONTINUATION SETUP
+# ============================================================================
+
+@dataclass
+class EMA200ContinuationConfig:
+    """Config for EMA200 trend continuation setup on 5m bars.
+    
+    Looks for price pullback to EMA200 in a trending market with
+    RSI confirmation and volume support.
+    """
+    
+    tick_size: float = 0.25
+    ema_proximity_ticks: float = 4.0  # how close to EMA200 counts as pullback
+    rsi_oversold: float = 35.0        # RSI level for long setups
+    rsi_overbought: float = 65.0      # RSI level for short setups
+    min_volume_ratio: float = 0.8     # volume vs SMA threshold
+    stop_atr_mult: float = 1.5        # stop distance in ATR
+    target_rr: float = 2.0
+    max_hold_bars: int = 48
+
+
+def find_ema200_continuation(
+    df_5m: pd.DataFrame,
+    cfg: Optional[EMA200ContinuationConfig] = None,
+) -> List[SetupEntry]:
+    """Find EMA200 continuation setups on 5m data with indicators."""
+    if cfg is None:
+        cfg = EMA200ContinuationConfig()
+    
+    df = df_5m.sort_index().copy()
+    required_cols = ["close", "ema_slow", "rsi", "atr", "volume_ratio"]
+    if not all(col in df.columns for col in required_cols):
+        return []
+    
+    entries: List[SetupEntry] = []
+    proximity = cfg.ema_proximity_ticks * cfg.tick_size
+    
+    for i in range(1, len(df)):
+        row = df.iloc[i]
+        prev_row = df.iloc[i-1]
+        
+        close = float(row["close"])
+        ema200 = float(row["ema_slow"])
+        rsi = float(row["rsi"])
+        atr = float(row["atr"])
+        vol_ratio = float(row["volume_ratio"])
+        
+        if pd.isna(ema200) or pd.isna(rsi) or pd.isna(atr) or atr <= 0:
+            continue
+        
+        # Long setup: price near EMA200 from above, RSI oversold, volume support
+        if (close > ema200 and abs(close - ema200) <= proximity and
+            rsi < cfg.rsi_oversold and vol_ratio >= cfg.min_volume_ratio):
+            
+            entry_price = close
+            stop_price = close - (cfg.stop_atr_mult * atr)
+            risk = abs(entry_price - stop_price)
+            target_price = entry_price + (cfg.target_rr * risk)
+            
+            entries.append(SetupEntry(
+                time=df.index[i],
+                direction="long",
+                kind="ema200_continuation",
+                entry_price=entry_price,
+                stop_price=stop_price,
+                target_price=target_price,
+                context={
+                    "ema200": ema200,
+                    "rsi": rsi,
+                    "atr": atr,
+                    "vol_ratio": vol_ratio,
+                }
+            ))
+        
+        # Short setup: price near EMA200 from below, RSI overbought, volume support
+        elif (close < ema200 and abs(close - ema200) <= proximity and
+              rsi > cfg.rsi_overbought and vol_ratio >= cfg.min_volume_ratio):
+            
+            entry_price = close
+            stop_price = close + (cfg.stop_atr_mult * atr)
+            risk = abs(entry_price - stop_price)
+            target_price = entry_price - (cfg.target_rr * risk)
+            
+            entries.append(SetupEntry(
+                time=df.index[i],
+                direction="short",
+                kind="ema200_continuation",
+                entry_price=entry_price,
+                stop_price=stop_price,
+                target_price=target_price,
+                context={
+                    "ema200": ema200,
+                    "rsi": rsi,
+                    "atr": atr,
+                    "vol_ratio": vol_ratio,
+                }
+            ))
+    
+    return entries
+
+
+def run_ema200_continuation_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
+    """Wrapper to run EMA200 continuation setup detection."""
+    cfg = EMA200ContinuationConfig(**kwargs)
+    entries = find_ema200_continuation(df_5m, cfg)
+    outcomes: List[SetupOutcome] = []
+    for entry in entries:
+        outcome = evaluate_generic_entry_1m(
+            df_5m.resample("1min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(),
+            entry,
+            max_minutes=cfg.max_hold_bars * 5
+        )
+        outcomes.append(outcome)
+    return outcomes
+
+
+# ============================================================================
+# BREAKOUT SETUP
+# ============================================================================
+
+@dataclass
+class BreakoutConfig:
+    """Config for breakout setup on 5m bars.
+    
+    Looks for price breaking above recent highs or below recent lows
+    with volume confirmation and momentum (MACD).
+    """
+    
+    tick_size: float = 0.25
+    lookback_bars: int = 20           # bars to find high/low
+    buffer_ticks: float = 2.0         # extra ticks for valid breakout
+    min_volume_ratio: float = 1.2     # volume vs SMA for confirmation
+    macd_threshold: float = 0.0       # MACD histogram threshold
+    stop_atr_mult: float = 1.5
+    target_rr: float = 2.5
+    max_hold_bars: int = 48
+
+
+def find_breakout(
+    df_5m: pd.DataFrame,
+    cfg: Optional[BreakoutConfig] = None,
+) -> List[SetupEntry]:
+    """Find breakout setups on 5m data with volume and MACD confirmation."""
+    if cfg is None:
+        cfg = BreakoutConfig()
+    
+    df = df_5m.sort_index().copy()
+    required_cols = ["close", "high", "low", "atr", "volume_ratio", "macd_histogram"]
+    if not all(col in df.columns for col in required_cols):
+        return []
+    
+    entries: List[SetupEntry] = []
+    buffer = cfg.buffer_ticks * cfg.tick_size
+    
+    for i in range(cfg.lookback_bars, len(df)):
+        row = df.iloc[i]
+        lookback_slice = df.iloc[i-cfg.lookback_bars:i]
+        
+        close = float(row["close"])
+        high = float(row["high"])
+        low = float(row["low"])
+        atr = float(row["atr"])
+        vol_ratio = float(row["volume_ratio"])
+        macd_hist = float(row["macd_histogram"])
+        
+        if pd.isna(atr) or atr <= 0 or pd.isna(vol_ratio) or pd.isna(macd_hist):
+            continue
+        
+        recent_high = float(lookback_slice["high"].max())
+        recent_low = float(lookback_slice["low"].min())
+        
+        # Long breakout: close above recent high with volume and MACD
+        if (close > recent_high + buffer and 
+            vol_ratio >= cfg.min_volume_ratio and
+            macd_hist > cfg.macd_threshold):
+            
+            entry_price = close
+            stop_price = recent_high - buffer
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price + (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=df.index[i],
+                    direction="long",
+                    kind="breakout",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "breakout_level": recent_high,
+                        "vol_ratio": vol_ratio,
+                        "macd_histogram": macd_hist,
+                    }
+                ))
+        
+        # Short breakout: close below recent low with volume and MACD
+        elif (close < recent_low - buffer and
+              vol_ratio >= cfg.min_volume_ratio and
+              macd_hist < -cfg.macd_threshold):
+            
+            entry_price = close
+            stop_price = recent_low + buffer
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price - (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=df.index[i],
+                    direction="short",
+                    kind="breakout",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "breakout_level": recent_low,
+                        "vol_ratio": vol_ratio,
+                        "macd_histogram": macd_hist,
+                    }
+                ))
+    
+    return entries
+
+
+def run_breakout_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
+    """Wrapper to run breakout setup detection."""
+    cfg = BreakoutConfig(**kwargs)
+    entries = find_breakout(df_5m, cfg)
+    outcomes: List[SetupOutcome] = []
+    for entry in entries:
+        outcome = evaluate_generic_entry_1m(
+            df_5m.resample("1min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(),
+            entry,
+            max_minutes=cfg.max_hold_bars * 5
+        )
+        outcomes.append(outcome)
+    return outcomes
+
+
+# ============================================================================
+# REVERSAL SETUP
+# ============================================================================
+
+@dataclass
+class ReversalConfig:
+    """Config for reversal setup on 5m bars.
+    
+    Looks for price rejecting Bollinger Band extremes with RSI divergence
+    and candlestick patterns (wicks).
+    """
+    
+    tick_size: float = 0.25
+    bb_touch_ticks: float = 2.0       # proximity to BB for touch
+    rsi_extreme_long: float = 30.0    # RSI oversold for long
+    rsi_extreme_short: float = 70.0   # RSI overbought for short
+    min_wick_ratio: float = 0.4       # wick size vs range for rejection
+    stop_atr_mult: float = 1.5
+    target_rr: float = 2.0
+    max_hold_bars: int = 36
+
+
+def find_reversal(
+    df_5m: pd.DataFrame,
+    cfg: Optional[ReversalConfig] = None,
+) -> List[SetupEntry]:
+    """Find reversal setups at BB extremes with RSI and wick confirmation."""
+    if cfg is None:
+        cfg = ReversalConfig()
+    
+    df = df_5m.sort_index().copy()
+    required_cols = ["open", "close", "high", "low", "bb_upper", "bb_lower", "rsi", "atr"]
+    if not all(col in df.columns for col in required_cols):
+        return []
+    
+    entries: List[SetupEntry] = []
+    proximity = cfg.bb_touch_ticks * cfg.tick_size
+    
+    for i in range(1, len(df)):
+        row = df.iloc[i]
+        
+        open_price = float(row["open"])
+        close = float(row["close"])
+        high = float(row["high"])
+        low = float(row["low"])
+        bb_upper = float(row["bb_upper"])
+        bb_lower = float(row["bb_lower"])
+        rsi = float(row["rsi"])
+        atr = float(row["atr"])
+        
+        if pd.isna(bb_upper) or pd.isna(bb_lower) or pd.isna(rsi) or pd.isna(atr) or atr <= 0:
+            continue
+        
+        bar_range = high - low
+        if bar_range <= 0:
+            continue
+        
+        # Long reversal: touch lower BB, RSI oversold, rejection wick
+        lower_wick = min(open_price, close) - low
+        wick_ratio = lower_wick / bar_range
+        
+        if (low <= bb_lower + proximity and 
+            rsi < cfg.rsi_extreme_long and
+            wick_ratio >= cfg.min_wick_ratio):
+            
+            entry_price = close
+            stop_price = low - (cfg.stop_atr_mult * atr)
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price + (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=df.index[i],
+                    direction="long",
+                    kind="reversal",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "bb_level": bb_lower,
+                        "rsi": rsi,
+                        "wick_ratio": wick_ratio,
+                    }
+                ))
+        
+        # Short reversal: touch upper BB, RSI overbought, rejection wick
+        upper_wick = high - max(open_price, close)
+        wick_ratio = upper_wick / bar_range
+        
+        if (high >= bb_upper - proximity and
+            rsi > cfg.rsi_extreme_short and
+            wick_ratio >= cfg.min_wick_ratio):
+            
+            entry_price = close
+            stop_price = high + (cfg.stop_atr_mult * atr)
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price - (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=df.index[i],
+                    direction="short",
+                    kind="reversal",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "bb_level": bb_upper,
+                        "rsi": rsi,
+                        "wick_ratio": wick_ratio,
+                    }
+                ))
+    
+    return entries
+
+
+def run_reversal_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
+    """Wrapper to run reversal setup detection."""
+    cfg = ReversalConfig(**kwargs)
+    entries = find_reversal(df_5m, cfg)
+    outcomes: List[SetupOutcome] = []
+    for entry in entries:
+        outcome = evaluate_generic_entry_1m(
+            df_5m.resample("1min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(),
+            entry,
+            max_minutes=cfg.max_hold_bars * 5
+        )
+        outcomes.append(outcome)
+    return outcomes
+
+
+# ============================================================================
+# OPENING PUSH SETUP
+# ============================================================================
+
+@dataclass
+class OpeningPushConfig:
+    """Config for opening push setup on 5m bars.
+    
+    Captures momentum in the first 15-30 minutes of the session with
+    volume and directional indicators.
+    """
+    
+    session_start_hour: int = 14      # 09:30 ET in UTC
+    session_start_minute: int = 30
+    push_window_minutes: int = 30     # duration to look for push
+    min_move_ticks: float = 8.0       # minimum move from open
+    min_volume_ratio: float = 1.5     # volume vs average
+    tick_size: float = 0.25
+    stop_atr_mult: float = 2.0
+    target_rr: float = 2.0
+    max_hold_bars: int = 48
+
+
+def find_opening_push(
+    df_5m: pd.DataFrame,
+    cfg: Optional[OpeningPushConfig] = None,
+) -> List[SetupEntry]:
+    """Find opening push setups in the first 30 minutes of session."""
+    if cfg is None:
+        cfg = OpeningPushConfig()
+    
+    df = df_5m.sort_index().copy()
+    required_cols = ["open", "close", "high", "low", "atr", "volume_ratio"]
+    if not all(col in df.columns for col in required_cols):
+        return []
+    
+    entries: List[SetupEntry] = []
+    
+    # Find session start
+    if df.empty:
+        return []
+    
+    first_ts = df.index[0]
+    session_start = first_ts.replace(
+        hour=cfg.session_start_hour,
+        minute=cfg.session_start_minute,
+        second=0,
+        microsecond=0,
+    )
+    push_end = session_start + pd.Timedelta(minutes=cfg.push_window_minutes)
+    
+    # Get opening range
+    open_slice = df[(df.index >= session_start) & (df.index < push_end)]
+    if open_slice.empty or len(open_slice) < 3:
+        return []
+    
+    open_price = float(open_slice.iloc[0]["open"])
+    min_move = cfg.min_move_ticks * cfg.tick_size
+    
+    # Look for strong directional move with volume
+    for i in range(2, len(open_slice)):
+        row = open_slice.iloc[i]
+        close = float(row["close"])
+        atr = float(row["atr"])
+        vol_ratio = float(row["volume_ratio"])
+        
+        if pd.isna(atr) or atr <= 0 or pd.isna(vol_ratio):
+            continue
+        
+        move_from_open = close - open_price
+        
+        # Long push: strong upward move with volume
+        if (move_from_open >= min_move and vol_ratio >= cfg.min_volume_ratio):
+            entry_price = close
+            stop_price = entry_price - (cfg.stop_atr_mult * atr)
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price + (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=open_slice.index[i],
+                    direction="long",
+                    kind="opening_push",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "session_open": open_price,
+                        "move_ticks": move_from_open / cfg.tick_size,
+                        "vol_ratio": vol_ratio,
+                    }
+                ))
+            # Take first valid signal
+            break
+        
+        # Short push: strong downward move with volume
+        elif (move_from_open <= -min_move and vol_ratio >= cfg.min_volume_ratio):
+            entry_price = close
+            stop_price = entry_price + (cfg.stop_atr_mult * atr)
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price - (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=open_slice.index[i],
+                    direction="short",
+                    kind="opening_push",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "session_open": open_price,
+                        "move_ticks": move_from_open / cfg.tick_size,
+                        "vol_ratio": vol_ratio,
+                    }
+                ))
+            # Take first valid signal
+            break
+    
+    return entries
+
+
+def run_opening_push_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
+    """Wrapper to run opening push setup detection."""
+    cfg = OpeningPushConfig(**kwargs)
+    entries = find_opening_push(df_5m, cfg)
+    outcomes: List[SetupOutcome] = []
+    for entry in entries:
+        outcome = evaluate_generic_entry_1m(
+            df_5m.resample("1min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(),
+            entry,
+            max_minutes=cfg.max_hold_bars * 5
+        )
+        outcomes.append(outcome)
+    return outcomes
+
+
+# ============================================================================
+# MOC (MARKET ON CLOSE) SETUP
+# ============================================================================
+
+@dataclass
+class MOCConfig:
+    """Config for Market on Close setup on 5m bars.
+    
+    Captures trend continuation or reversal behavior in the last hour
+    of the session, often driven by institutional flows.
+    """
+    
+    session_end_hour: int = 20        # 16:00 ET in UTC (approx)
+    session_end_minute: int = 0
+    moc_window_minutes: int = 60      # last hour before close
+    min_directional_bars: int = 3     # consecutive bars in same direction
+    min_volume_ratio: float = 1.2     # volume confirmation
+    tick_size: float = 0.25
+    stop_atr_mult: float = 1.5
+    target_rr: float = 1.5            # shorter target for EOD
+    max_hold_bars: int = 24
+
+
+def find_moc(
+    df_5m: pd.DataFrame,
+    cfg: Optional[MOCConfig] = None,
+) -> List[SetupEntry]:
+    """Find Market on Close setups in the last hour of session."""
+    if cfg is None:
+        cfg = MOCConfig()
+    
+    df = df_5m.sort_index().copy()
+    required_cols = ["open", "close", "high", "low", "atr", "volume_ratio"]
+    if not all(col in df.columns for col in required_cols):
+        return []
+    
+    entries: List[SetupEntry] = []
+    
+    if df.empty:
+        return []
+    
+    # Find session end
+    last_ts = df.index[-1]
+    session_end = last_ts.replace(
+        hour=cfg.session_end_hour,
+        minute=cfg.session_end_minute,
+        second=0,
+        microsecond=0,
+    )
+    moc_start = session_end - pd.Timedelta(minutes=cfg.moc_window_minutes)
+    
+    # Get MOC window
+    moc_slice = df[(df.index >= moc_start) & (df.index < session_end)]
+    if moc_slice.empty or len(moc_slice) < cfg.min_directional_bars + 1:
+        return []
+    
+    # Look for directional run with volume
+    for i in range(cfg.min_directional_bars, len(moc_slice)):
+        lookback = moc_slice.iloc[i-cfg.min_directional_bars:i]
+        row = moc_slice.iloc[i]
+        
+        closes = lookback["close"].values
+        atr = float(row["atr"])
+        vol_ratio = float(row["volume_ratio"])
+        
+        if pd.isna(atr) or atr <= 0 or pd.isna(vol_ratio):
+            continue
+        
+        # Check for directional move
+        up_bars = sum(1 for j in range(len(closes)-1) if closes[j+1] > closes[j])
+        down_bars = sum(1 for j in range(len(closes)-1) if closes[j+1] < closes[j])
+        
+        close = float(row["close"])
+        
+        # Long setup: consistent upward momentum
+        if (up_bars >= cfg.min_directional_bars - 1 and 
+            vol_ratio >= cfg.min_volume_ratio):
+            
+            entry_price = close
+            stop_price = float(lookback["low"].min()) - (cfg.stop_atr_mult * atr * 0.5)
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price + (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=moc_slice.index[i],
+                    direction="long",
+                    kind="moc",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "up_bars": up_bars,
+                        "vol_ratio": vol_ratio,
+                        "time_to_close": (session_end - moc_slice.index[i]).total_seconds() / 60,
+                    }
+                ))
+            # Take first valid signal
+            break
+        
+        # Short setup: consistent downward momentum
+        elif (down_bars >= cfg.min_directional_bars - 1 and
+              vol_ratio >= cfg.min_volume_ratio):
+            
+            entry_price = close
+            stop_price = float(lookback["high"].max()) + (cfg.stop_atr_mult * atr * 0.5)
+            risk = abs(entry_price - stop_price)
+            if risk > 0:
+                target_price = entry_price - (cfg.target_rr * risk)
+                
+                entries.append(SetupEntry(
+                    time=moc_slice.index[i],
+                    direction="short",
+                    kind="moc",
+                    entry_price=entry_price,
+                    stop_price=stop_price,
+                    target_price=target_price,
+                    context={
+                        "down_bars": down_bars,
+                        "vol_ratio": vol_ratio,
+                        "time_to_close": (session_end - moc_slice.index[i]).total_seconds() / 60,
+                    }
+                ))
+            # Take first valid signal
+            break
+    
+    return entries
+
+
+def run_moc_family(df_5m: pd.DataFrame, **kwargs) -> List[SetupOutcome]:
+    """Wrapper to run MOC setup detection."""
+    cfg = MOCConfig(**kwargs)
+    entries = find_moc(df_5m, cfg)
+    outcomes: List[SetupOutcome] = []
+    for entry in entries:
+        outcome = evaluate_generic_entry_1m(
+            df_5m.resample("1min").agg({"open":"first","high":"max","low":"min","close":"last","volume":"sum"}).dropna(),
+            entry,
+            max_minutes=cfg.max_hold_bars * 5
+        )
+        outcomes.append(outcome)
+    return outcomes

@@ -6,7 +6,16 @@ from typing import Any, Dict, Literal
 import pandas as pd
 
 Direction = Literal["long", "short"]
-SetupKind = Literal["orb", "level_scalp", "ema20_vwap_revert", "ema200_continuation"]
+SetupKind = Literal[
+    "orb", 
+    "level_scalp", 
+    "ema20_vwap_revert", 
+    "ema200_continuation",
+    "breakout",
+    "reversal",
+    "opening_push",
+    "moc"
+]
 
 
 @dataclass
