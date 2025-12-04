@@ -1,0 +1,83 @@
+{
+  "found": true,
+  "iteration": 0,
+  "seed": 42,
+  "entries": [
+    {
+      "time": "2025-12-04 15:04:00+00:00",
+      "direction": "short",
+      "entry_price": 4495.25,
+      "stop_price": 4688.5,
+      "target_price": 4108.75,
+      "or_high": 4688.0,
+      "or_low": 4500.25,
+      "or_start": "2025-12-04 14:30:00+00:00",
+      "or_end": "2025-12-04 14:59:00+00:00",
+      "kind": "orb"
+    }
+  ],
+  "outcomes": [
+    {
+      "entry": {
+        "time": "2025-12-04 15:04:00+00:00",
+        "direction": "short",
+        "entry_price": 4495.25,
+        "stop_price": 4688.5,
+        "target_price": 4108.75,
+        "or_high": 4688.0,
+        "or_low": 4500.25,
+        "or_start": "2025-12-04 14:30:00+00:00",
+        "or_end": "2025-12-04 14:59:00+00:00",
+        "kind": "orb"
+      },
+      "hit_target": false,
+      "hit_stop": false,
+      "exit_time": "2025-12-04 19:04:00+00:00",
+      "r_multiple": 0.13195342820181113,
+      "mfe": 115.0,
+      "mae": -40.5
+    }
+  ],
+  "miss": {
+    "has_or_window": true,
+    "or_height": 187.75,
+    "drive_up": 0.0,
+    "drive_down": 154.25,
+    "up_rr": 0.0,
+    "down_rr": 0.8215712383488681,
+    "reason": "no_breakout_bar_found"
+  },
+  "features": [
+    {
+      "kind": "orb",
+      "direction": "short",
+      "entry_time": "2025-12-04 15:04:00+00:00",
+      "exit_time": "2025-12-04 19:04:00+00:00",
+      "hour": 15,
+      "minute": 4,
+      "entry_price": 4495.25,
+      "stop_price": 4688.5,
+      "target_price": 4108.75,
+      "risk": 193.25,
+      "r_multiple": 0.13195342820181113,
+      "mfe": 115.0,
+      "mae": -40.5,
+      "mfe_mae_ratio": 2.8395061728395063,
+      "dist_ema_fast": -43.99858502019924,
+      "dist_ema_slow": -116.15595215125995,
+      "dist_vwap": -224.22516957851894,
+      "body_frac": 0.2727272727272727,
+      "wick_up_frac": 0.7272727272727273,
+      "wick_dn_frac": 0.0,
+      "bars_to_exit": 240,
+      "low_rr_flag": 1,
+      "chase_flag": 0,
+      "hesitation_flag": 1,
+      "ctx_or_high": 4688.0,
+      "ctx_or_low": 4500.25,
+      "ctx_or_start": "2025-12-04 14:30:00+00:00",
+      "ctx_or_end": "2025-12-04 14:59:00+00:00"
+    }
+  ],
+  "summary": "found 1 entries on iteration 0 seed 42"
+}

@@ -1,0 +1,83 @@
+{
+  "found": true,
+  "iteration": 0,
+  "seed": 100,
+  "entries": [
+    {
+      "time": "2025-12-04 15:04:00+00:00",
+      "direction": "long",
+      "entry_price": 5661.5,
+      "stop_price": 5424.0,
+      "target_price": 6136.5,
+      "or_high": 5651.5,
+      "or_low": 5424.5,
+      "or_start": "2025-12-04 14:30:00+00:00",
+      "or_end": "2025-12-04 14:59:00+00:00",
+      "kind": "orb"
+    }
+  ],
+  "outcomes": [
+    {
+      "entry": {
+        "time": "2025-12-04 15:04:00+00:00",
+        "direction": "long",
+        "entry_price": 5661.5,
+        "stop_price": 5424.0,
+        "target_price": 6136.5,
+        "or_high": 5651.5,
+        "or_low": 5424.5,
+        "or_start": "2025-12-04 14:30:00+00:00",
+        "or_end": "2025-12-04 14:59:00+00:00",
+        "kind": "orb"
+      },
+      "hit_target": false,
+      "hit_stop": false,
+      "exit_time": "2025-12-04 19:04:00+00:00",
+      "r_multiple": 0.22105263157894736,
+      "mfe": 97.0,
+      "mae": 0.0
+    }
+  ],
+  "miss": {
+    "has_or_window": true,
+    "or_height": 227.0,
+    "drive_up": 183.75,
+    "drive_down": 0.0,
+    "up_rr": 0.8094713656387665,
+    "down_rr": 0.0,
+    "reason": "no_breakout_bar_found"
+  },
+  "features": [
+    {
+      "kind": "orb",
+      "direction": "long",
+      "entry_time": "2025-12-04 15:04:00+00:00",
+      "exit_time": "2025-12-04 19:04:00+00:00",
+      "hour": 15,
+      "minute": 4,
+      "entry_price": 5661.5,
+      "stop_price": 5424.0,
+      "target_price": 6136.5,
+      "risk": 237.5,
+      "r_multiple": 0.22105263157894736,
+      "mfe": 97.0,
+      "mae": 0.0,
+      "mfe_mae_ratio": 0.0,
+      "dist_ema_fast": 48.29849110825853,
+      "dist_ema_slow": 385.2098243020873,
+      "dist_vwap": 552.6062437818446,
+      "body_frac": 0.8333333333333334,
+      "wick_up_frac": 0.0,
+      "wick_dn_frac": 0.16666666666666666,
+      "bars_to_exit": 240,
+      "low_rr_flag": 1,
+      "chase_flag": 0,
+      "hesitation_flag": 0,
+      "ctx_or_high": 5651.5,
+      "ctx_or_low": 5424.5,
+      "ctx_or_start": "2025-12-04 14:30:00+00:00",
+      "ctx_or_end": "2025-12-04 14:59:00+00:00"
+    }
+  ],
+  "summary": "found 1 entries on iteration 0 seed 100"
+}

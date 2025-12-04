@@ -16,9 +16,9 @@ from tqdm import tqdm
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators.price_generator import PriceGenerator, StateConfig, PhysicsConfig
-from lab.generators.fractal_states import FractalStateManager
-from lab.generators.custom_states import CUSTOM_STATES
+from src.core.generator import PriceGenerator, StateConfig, PhysicsConfig
+from src.core.generator.states import FractalStateManager
+from src.core.generator import CUSTOM_STATES
 
 def main():
     print("=" * 60)

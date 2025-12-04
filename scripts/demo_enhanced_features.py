@@ -15,8 +15,8 @@ import matplotlib.pyplot as plt
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators.price_generator import PriceGenerator, MarketState
-from lab.generators.utils import summarize_day, print_summary, compare_states
+from src.core.generator import PriceGenerator, MarketState
+from src.core.generator.utils import summarize_day, print_summary, compare_states
 from lab.visualizers.chart_viz import ChartVisualizer, ChartConfig
 
 

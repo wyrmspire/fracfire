@@ -28,14 +28,14 @@ except ImportError as e:
     print(f"✗ Missing dependency: {e}")
     sys.exit(1)
 
-# Test 2: Import lab modules
-print("\n[2/6] Testing lab modules...")
+# Test 2: Import core modules
+print("\n[2/6] Testing core modules...")
 try:
-    from lab.generators import PriceGenerator, MarketState
-    from lab.generators.utils import summarize_day, print_summary
-    print("✓ Lab generators module OK")
+    from src.core.generator import PriceGenerator, MarketState
+    from src.core.generator.utils import summarize_day, print_summary
+    print("✓ Core generator module OK")
 except ImportError as e:
-    print(f"✗ Failed to import lab modules: {e}")
+    print(f"✗ Failed to import core modules: {e}")
     sys.exit(1)
 
 # Test 3: Generate synthetic data
@@ -112,10 +112,10 @@ except Exception as e:
 print("\n[6/6] Testing directory structure...")
 try:
     required_dirs = [
-        root / "lab" / "generators",
-        root / "lab" / "visualizers",
+        root / "src" / "core" / "generator",
+        root / "src" / "core" / "detector",
         root / "src" / "data",
-        root / "src" / "models",
+        root / "src" / "ml",
         root / "scripts",
         root / "docs",
         root / "out" / "charts",

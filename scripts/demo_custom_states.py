@@ -15,8 +15,8 @@ import pandas as pd
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators.price_generator import PriceGenerator
-from lab.generators.custom_states import CUSTOM_STATES, get_custom_state
+from src.core.generator import PriceGenerator
+from src.core.generator import CUSTOM_STATES, get_custom_state
 from lab.visualizers.chart_viz import ChartVisualizer, ChartConfig
 
 

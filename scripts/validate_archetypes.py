@@ -16,7 +16,7 @@ from typing import Dict, List, Any
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators.utils import summarize_day
+from src.core.generator.utils import summarize_day
 
 # Configuration
 ARCHETYPE_DIR = root / "out" / "data" / "synthetic" / "archetypes"

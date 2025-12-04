@@ -15,8 +15,8 @@ import numpy as np
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators.price_generator import PriceGenerator, StateConfig
-from lab.generators.fractal_states import FractalStateManager, DayState, DAY_STATE_PARAMS
+from src.core.generator import PriceGenerator, StateConfig
+from src.core.generator.states import FractalStateManager, DayState, DAY_STATE_PARAMS
 
 def test_day_config(day_state: DayState, direction: int = 1, n_days: int = 5):
     print(f"\nTesting {day_state.name} (Direction: {direction})")

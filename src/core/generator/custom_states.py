@@ -2,10 +2,10 @@
 Custom Market State Configurations
 
 Pre-defined extreme and specialized market states for testing and simulation.
-These complement the standard STATE_CONFIGS in price_generator.py
+These complement the standard STATE_CONFIGS in engine.py
 """
 
-from .price_generator import StateConfig
+from .engine import StateConfig
 
 
 # Extreme volatility states

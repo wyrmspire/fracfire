@@ -20,7 +20,7 @@ import pandas as pd
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators import PriceGenerator               # noqa: E402
+from src.core.generator import PriceGenerator               # noqa: E402
 from lab.visualizers import ChartVisualizer, ChartConfig # noqa: E402
 
 

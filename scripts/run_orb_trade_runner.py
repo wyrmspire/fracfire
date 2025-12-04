@@ -26,14 +26,14 @@ PROJECT_ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 if PROJECT_ROOT not in sys.path:
     sys.path.insert(0, PROJECT_ROOT)
 
-from lab.generators.price_generator import PhysicsConfig, PriceGenerator
-from src.evaluation.setups import (
+from src.core.generator import PhysicsConfig, PriceGenerator
+from src.core.detector.library import (
     ORBConfig,
     summarize_orb_day_1m,
 )
-from src.evaluation.indicators import IndicatorConfig, add_1m_indicators, DecisionAnchorConfig
-from src.evaluation.models import SetupEntry, SetupOutcome
-from src.evaluation.trade_features import compute_trade_features, BadTradeConfig, inject_bad_trade_variants
+from src.core.detector import IndicatorConfig, add_1m_indicators, DecisionAnchorConfig
+from src.core.detector import SetupEntry, SetupOutcome
+from src.core.detector import compute_trade_features, BadTradeConfig, inject_bad_trade_variants
 
 
 def generate_synth_1m_days(days: int, seed: int) -> pd.DataFrame:

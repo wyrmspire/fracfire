@@ -12,7 +12,7 @@ import sys
 root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
-from lab.generators.price_generator import (
+from src.core.generator import (
     PriceGenerator,
     MarketState,
     StateConfig,

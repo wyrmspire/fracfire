@@ -32,7 +32,7 @@ root = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(root))
 
 from src.data.loader import RealDataLoader
-from lab.generators.price_generator import PriceGenerator, PhysicsConfig
+from src.core.generator import PriceGenerator, PhysicsConfig
 from scripts.compare_real_vs_generator import generate_synthetic_matching, pick_real_windows
 
 
