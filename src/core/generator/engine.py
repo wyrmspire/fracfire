@@ -11,6 +11,8 @@ from datetime import datetime, timedelta
 import numpy as np
 import pandas as pd
 from enum import Enum
+from .sampler import PhysicsSampler, PhysicsProfile
+from .fractal_planner import FractalPlanner, TrajectoryPlan
 
 
 class MarketState(Enum):
@@ -89,56 +91,73 @@ class StateConfig:
 
 
 # Predefined state configurations
+# Base state configuration (Neutral / "Good Physics")
+BASE_STATE = StateConfig(
+    name="base",
+    avg_ticks_per_bar=8.0,
+    ticks_per_bar_std=4.0,
+    up_probability=0.5,
+    trend_persistence=0.4, # Reduced from 0.5 to reduce clumping
+    avg_tick_size=1.0,
+    tick_size_std=0.5,
+    max_tick_jump=5,
+    volatility_multiplier=1.0,
+    wick_probability=0.2,
+    wick_extension_avg=1.5,
+    mean_reversion_strength=0.0,
+)
+
+# Predefined state configurations (Relative offsets/biases from BASE)
 STATE_CONFIGS = {
     MarketState.RANGING: StateConfig(
         name="ranging",
-        avg_ticks_per_bar=4.0,
-        ticks_per_bar_std=2.0,
-        up_probability=0.5,
-        trend_persistence=0.4,
+        avg_ticks_per_bar=6.0,          # Slightly lower activity
+        ticks_per_bar_std=3.0,
+        up_probability=0.5,             # Neutral
+        trend_persistence=0.4,          # Lower persistence (mean reverting)
         avg_tick_size=1.0,
         tick_size_std=0.5,
-        max_tick_jump=3,
-        volatility_multiplier=1.0,
+        max_tick_jump=4,
+        volatility_multiplier=0.9,      # Slightly lower vol
         wick_probability=0.2,
         wick_extension_avg=1.5,
     ),
     MarketState.ZOMBIE: StateConfig(
         name="zombie",
-        avg_ticks_per_bar=3.0,
-        ticks_per_bar_std=1.5,
-        up_probability=0.55,
-        trend_persistence=0.8,
+        avg_ticks_per_bar=4.0,          # Low activity
+        ticks_per_bar_std=2.0,
+        up_probability=0.52,            # Slight drift
+        trend_persistence=0.6,          # Sticky
         avg_tick_size=1.0,
         tick_size_std=0.2,
         max_tick_jump=2,
-        volatility_multiplier=0.6,
+        volatility_multiplier=0.7,      # Low vol
         wick_probability=0.1,
         wick_extension_avg=1.0,
     ),
     MarketState.RALLY: StateConfig(
         name="rally",
-        avg_ticks_per_bar=6.0,
-        ticks_per_bar_std=3.0,
-        up_probability=0.6,
-        trend_persistence=0.7,
-        avg_tick_size=1.2,
+        avg_ticks_per_bar=10.0,         # Higher activity
+        ticks_per_bar_std=5.0,
+        up_probability=0.60,            # Bias up (was 0.75+)
+        trend_persistence=0.65,         # Trending (was 0.85)
+        avg_tick_size=1.1,
         tick_size_std=0.5,
-        max_tick_jump=4,
-        volatility_multiplier=1.2,
+        max_tick_jump=5,
+        volatility_multiplier=1.3,      # Higher vol (was 1.8)
         wick_probability=0.15,
         wick_extension_avg=1.5,
     ),
     MarketState.IMPULSIVE: StateConfig(
         name="impulsive",
-        avg_ticks_per_bar=10.0,
-        ticks_per_bar_std=5.0,
-        up_probability=0.5,
-        trend_persistence=0.6,
-        avg_tick_size=1.5,
-        tick_size_std=0.8,
+        avg_ticks_per_bar=12.0,
+        ticks_per_bar_std=6.0,
+        up_probability=0.5,             # Neutral direction, high variance
+        trend_persistence=0.55,
+        avg_tick_size=1.3,
+        tick_size_std=0.6,
         max_tick_jump=6,
-        volatility_multiplier=1.5,
+        volatility_multiplier=1.5,      # High vol
         wick_probability=0.25,
         wick_extension_avg=2.0,
     ),
@@ -146,40 +165,39 @@ STATE_CONFIGS = {
         name="breakdown",
         avg_ticks_per_bar=12.0,
         ticks_per_bar_std=6.0,
-        up_probability=0.25,
-        trend_persistence=0.85,
-        avg_tick_size=1.5,
-        tick_size_std=0.8,
+        up_probability=0.40,            # Bias down (was 0.25)
+        trend_persistence=0.70,         # Strong trend (was 0.85)
+        avg_tick_size=1.2,
+        tick_size_std=0.6,
         max_tick_jump=6,
-        volatility_multiplier=1.8,
-        wick_probability=0.25,
-        wick_extension_avg=2.5,
+        volatility_multiplier=1.6,      # High vol (was 1.8)
+        wick_probability=0.2,
+        wick_extension_avg=2.0,
     ),
     MarketState.BREAKOUT: StateConfig(
         name="breakout",
         avg_ticks_per_bar=12.0,
         ticks_per_bar_std=6.0,
-        up_probability=0.75,
-        trend_persistence=0.85,
-        avg_tick_size=1.5,
-        tick_size_std=0.8,
+        up_probability=0.60,            # Bias up (was 0.75)
+        trend_persistence=0.70,         # Strong trend (was 0.85)
+        avg_tick_size=1.2,
+        tick_size_std=0.6,
         max_tick_jump=6,
-        volatility_multiplier=1.8,
-        wick_probability=0.25,
-        wick_extension_avg=2.5,
+        volatility_multiplier=1.6,      # High vol (was 1.8)
+        wick_probability=0.2,
+        wick_extension_avg=2.0,
     ),
-    # Fallback config for FLAT state (very low volatility / movement)
     MarketState.FLAT: StateConfig(
         name="flat",
-        avg_ticks_per_bar=2.0,
-        ticks_per_bar_std=1.0,
+        avg_ticks_per_bar=3.0,
+        ticks_per_bar_std=1.5,
         up_probability=0.5,
-        trend_persistence=0.2,
-        avg_tick_size=0.5,
-        tick_size_std=0.2,
+        trend_persistence=0.3,
+        avg_tick_size=0.8,
+        tick_size_std=0.3,
         max_tick_jump=2,
-        volatility_multiplier=0.3,
-        wick_probability=0.05,
+        volatility_multiplier=0.5,
+        wick_probability=0.1,
         wick_extension_avg=1.0,
     ),
 }
@@ -259,16 +277,18 @@ class PriceGenerator:
     def __init__(
         self,
         initial_price: float = 5000.0,
-        seed: Optional[int] = None,
         physics_config: Optional[PhysicsConfig] = None,
+        seed: Optional[int] = None,
+        warmup_data: Optional[pd.DataFrame] = None
     ):
         """
         Initialize the price generator.
         
         Args:
             initial_price: Starting price level
-            seed: Random seed for reproducibility
             physics_config: Physics configuration (knobs)
+            seed: Random seed for reproducibility
+            warmup_data: Optional DataFrame with historical data to warm up the planner
         """
         self.initial_price = initial_price
         self.current_price = initial_price
@@ -281,6 +301,23 @@ class PriceGenerator:
         # Liquidity Levels
         self.prev_day_close = initial_price
         self.prev_week_close = initial_price
+        
+        # Physics Sampler (Generative Model)
+        self.sampler = PhysicsSampler()
+        self.current_physics_profile: Optional[PhysicsProfile] = None
+        self.last_sampler_update = None
+        
+        # Fractal Planner (Mission Control)
+        self.planner = FractalPlanner()
+        self.current_plan: Optional[TrajectoryPlan] = None
+        self.last_plan_update = None
+        
+        if warmup_data is not None:
+            self.planner.warmup_history(warmup_data)
+            # Also set initial price to last close of warmup
+            if not warmup_data.empty:
+                self.current_price = warmup_data['close'].iloc[-1]
+                self.prev_day_close = self.current_price # Approximation
         
         if seed is not None:
             np.random.seed(seed)
@@ -357,75 +394,250 @@ class PriceGenerator:
         self.last_direction = direction
         return direction, tick_size
     
+    def blend_state_configs(self, base: StateConfig, target: StateConfig, alpha: float) -> StateConfig:
+        """Blend two state configs with a mixing factor alpha (0.0 to 1.0)."""
+        def lerp(a, b):
+            return a + alpha * (b - a)
+            
+        return StateConfig(
+            name=target.name,
+            avg_ticks_per_bar=lerp(base.avg_ticks_per_bar, target.avg_ticks_per_bar),
+            ticks_per_bar_std=lerp(base.ticks_per_bar_std, target.ticks_per_bar_std),
+            up_probability=lerp(base.up_probability, target.up_probability),
+            trend_persistence=lerp(base.trend_persistence, target.trend_persistence),
+            avg_tick_size=lerp(base.avg_tick_size, target.avg_tick_size),
+            tick_size_std=lerp(base.tick_size_std, target.tick_size_std),
+            max_tick_jump=int(lerp(base.max_tick_jump, target.max_tick_jump)),
+            volatility_multiplier=lerp(base.volatility_multiplier, target.volatility_multiplier),
+            wick_probability=lerp(base.wick_probability, target.wick_probability),
+            wick_extension_avg=lerp(base.wick_extension_avg, target.wick_extension_avg),
+            mean_reversion_strength=lerp(base.mean_reversion_strength, target.mean_reversion_strength),
+        )
+
+    def _update_physics_from_sampler(self, timestamp: datetime):
+        """
+        Query the PhysicsSampler and update the current physics profile.
+        Run this every 30 minutes.
+        """
+        if self.last_sampler_update is None or (timestamp - self.last_sampler_update).total_seconds() >= 1800:
+            # We need recent metrics to query the sampler.
+            # For now, let's use placeholders or track them in the generator.
+            # Ideally, we'd track rolling volatility and trend.
+            
+            # Placeholder: Random walk context if we don't have history
+            recent_vol = 1.0
+            recent_trend = 0.0
+            recent_dir = 0.0
+            
+            profile = self.sampler.sample_physics(
+                current_time=timestamp,
+                recent_volatility=recent_vol,
+                recent_trend=recent_trend,
+                recent_direction=recent_dir
+            )
+            
+            if profile:
+                self.current_physics_profile = profile
+                self.last_sampler_update = timestamp
+                # print(f"[{timestamp}] Updated Physics: Vol={profile.volatility:.2f}, Trend={profile.trend_efficiency:.2f}")
+
+    def _update_plan(self, timestamp: datetime):
+        """
+        Query the FractalPlanner for a new mission.
+        Run this every 60 minutes.
+        """
+        if self.last_plan_update is None or (timestamp - self.last_plan_update).total_seconds() >= 3600:
+            plan = self.planner.get_plan()
+            if plan:
+                self.current_plan = plan
+                self.last_plan_update = timestamp
+                # print(f"[{timestamp}] New Plan: Move={plan.displacement:.2f}, Dist={plan.total_distance:.2f}")
+
     def generate_bar(
-        self,
-        timestamp: datetime,
+        self, 
+        timestamp: datetime, 
         state: MarketState = MarketState.RANGING,
-        custom_state_config: Optional[StateConfig] = None,
+        custom_state_config: Optional[StateConfig] = None
     ) -> dict:
         """
         Generate a single 1-minute OHLCV bar.
         
         Args:
             timestamp: Bar timestamp
-            state: Market state to use
-            custom_state_config: Optional custom state configuration (overrides state)
-        
+            state: Market state (affects dynamics)
+            custom_state_config: Override for state config
+            
         Returns:
-            Dictionary with keys: time, open, high, low, close, volume
+            Dict with open, high, low, close, volume
         """
-        # Get configurations
-        state_config = custom_state_config or STATE_CONFIGS[state]
+        # 0. Update Drivers
+        self._update_physics_from_sampler(timestamp)
+        self._update_plan(timestamp)
+        
+        # 1. Determine Configs
+        # Blend BASE_STATE with the target state (alpha=0.3 for stronger bias)
+        target_cfg = custom_state_config or STATE_CONFIGS[state]
+        
+        # Apply Planner Overrides (Mission Control)
+        # If we have a plan, it takes precedence over the Sampler and State
+        if self.current_plan:
+            # Map Plan to Physics
+            # Displacement -> Direction Bias
+            # Total Distance -> Volatility
+            
+            # Volatility
+            # Base distance for 1h is ~100-200 points? 
+            # Let's normalize. 
+            # If total_distance is high, high vol.
+            vol_mult = max(0.5, self.current_plan.total_distance / 100.0) # Scaling factor
+            
+            # Direction
+            # Displacement is net move.
+            # If displacement is +50, we want up_prob > 0.5
+            # Scale: 50 points = strong trend
+            disp_norm = self.current_plan.displacement / 50.0
+            up_prob = 0.5 + (np.tanh(disp_norm) * 0.2) # +/- 0.2 bias
+            
+            # Persistence
+            # If High/Low excursion is large but displacement is small -> High Vol, Low Trend (Chop)
+            # If Displacement ~= Total Distance -> High Trend
+            efficiency = abs(self.current_plan.displacement) / (self.current_plan.total_distance + 1e-9)
+            persistence = 0.3 + (efficiency * 0.5) # 0.3 to 0.8
+            
+            planned_cfg = StateConfig(
+                name="planned",
+                volatility_multiplier=vol_mult,
+                up_probability=up_prob,
+                trend_persistence=persistence,
+                wick_probability=0.2, # Default
+                avg_ticks_per_bar=8.0,
+                ticks_per_bar_std=4.0,
+                avg_tick_size=1.0,
+                tick_size_std=0.5,
+                max_tick_jump=5,
+                wick_extension_avg=1.5,
+                mean_reversion_strength=0.0
+            )
+            
+            # Strong override
+            state_config = self.blend_state_configs(BASE_STATE, planned_cfg, alpha=0.8)
+            
+        # Apply Sampler Overrides if active (and no plan yet)
+        elif self.current_physics_profile:
+            # ... (Existing Sampler Logic) ...
+            # Create a dynamic state config based on the sampled profile
+            # We map the profile metrics to StateConfig parameters
+            
+            # Volatility -> Vol Multiplier
+            # Base vol in library is ~1.0-2.0.
+            vol_mult = self.current_physics_profile.volatility / 1.5 
+            
+            # Trend -> Trend Persistence & Up Prob
+            # Direction is -1 to 1.
+            direction = self.current_physics_profile.direction
+            trend_strength = self.current_physics_profile.trend_efficiency
+            
+            # Bias up_prob based on direction
+            # 0.5 +/- 0.2
+            up_prob = 0.5 + (direction * 20.0) # Scale direction (small number) to prob
+            up_prob = max(0.4, min(0.6, up_prob)) # Clamp
+            
+            # Persistence based on efficiency
+            persistence = 0.4 + (trend_strength * 2.0)
+            persistence = min(0.8, persistence)
+            
+            # Wick ratio
+            wick_prob = 0.1 + (self.current_physics_profile.wick_ratio * 0.5)
+            
+            sampled_cfg = StateConfig(
+                name="sampled",
+                volatility_multiplier=vol_mult,
+                up_probability=up_prob,
+                trend_persistence=persistence,
+                wick_probability=wick_prob,
+                # Keep others default
+                avg_ticks_per_bar=8.0,
+                ticks_per_bar_std=4.0,
+                avg_tick_size=1.0,
+                tick_size_std=0.5,
+                max_tick_jump=5,
+                wick_extension_avg=1.5,
+                mean_reversion_strength=0.0
+            )
+            
+            # Blend the Sampled Config with the Base State
+            # We give the Sampled Config high weight (e.g. 0.7) because it represents "Reality"
+            state_config = self.blend_state_configs(BASE_STATE, sampled_cfg, alpha=0.7)
+            
+        else:
+            # Fallback to standard state logic
+            state_config = self.blend_state_configs(BASE_STATE, target_cfg, alpha=0.3)
+        
         session = self.get_session(timestamp)
         session_config = SESSION_CONFIGS[session]
         dow_config = DOW_CONFIGS[timestamp.weekday()]
         
-        # Determine number of ticks for this bar
-        num_ticks = max(
-            1,
-            int(self.rng.normal(
-                state_config.avg_ticks_per_bar,
-                state_config.ticks_per_bar_std
-            ))
-        )
+        # Intra-day Volume Profile (RTH only)
+        time_mult = 1.0
+        if session == Session.RTH:
+            hour = timestamp.hour
+            minute = timestamp.minute
+            
+            # Open (9:30 - 10:30): High volume
+            if hour == 9 or (hour == 10 and minute < 30):
+                time_mult = 1.5
+            # Lunch (11:30 - 13:00): Low volume
+            elif (hour == 11 and minute >= 30) or hour == 12:
+                time_mult = 0.6
+            # Close (15:00 - 16:00): High volume
+            elif hour == 15:
+                time_mult = 1.4
         
-        # Generate tick-by-tick price action
+        # 2. Determine Activity Level (Tick Count)
+        # Base ticks * Session Mult * DOW Mult * Time Mult * Random Noise
+        avg_ticks = state_config.avg_ticks_per_bar * self.physics.avg_ticks_per_bar / 8.0
+        avg_ticks *= session_config.volume_multiplier * dow_config.volume_multiplier * time_mult
+        
+        num_ticks = int(self.rng.normal(avg_ticks, state_config.ticks_per_bar_std))
+        num_ticks = max(1, num_ticks) # At least 1 tick
+        
+        # 3. Generate Ticks
         open_price = self.current_price
         high_price = open_price
         low_price = open_price
-        current = open_price
+        
+        # Reset direction for new bar? Or keep momentum?
+        # Let's keep momentum but decay it slightly
         
         for _ in range(num_ticks):
-            direction, tick_size = self.generate_tick_movement(
-                state_config, session_config, dow_config
-            )
+            direction, tick_size = self.generate_tick_movement(state_config, session_config, dow_config)
             
-            # Move price
-            price_change = direction * tick_size * self.TICK_SIZE
-            current += price_change
+            # Apply movement
+            move = direction * tick_size * self.TICK_SIZE
+            self.current_price += move
             
-            # Update high/low
-            high_price = max(high_price, current)
-            low_price = min(low_price, current)
+            # Update High/Low
+            if self.current_price > high_price:
+                high_price = self.current_price
+            if self.current_price < low_price:
+                low_price = self.current_price
+                
+            # Update last direction
+            if direction != 0:
+                self.last_direction = direction
+                
+        # 4. Apply Wicks (Post-processing physics)
+        # Sometimes price extends further than the random walk suggests (stop runs)
+        if self.rng.random() < state_config.wick_probability * self.physics.wick_probability / 0.2:
+            extension = self.rng.exponential(state_config.wick_extension_avg) * self.TICK_SIZE
+            if self.rng.random() < 0.5:
+                high_price += extension
+                # If we extended high, maybe close pulls back?
+                # For now, just extend the range
+            else:
+                low_price -= extension
         
-        close_price = current
-        
-        # Add wicks (extended highs/lows that don't close there)
-        if self.rng.random() < state_config.wick_probability:
-            # Upper wick
-            wick_ticks = max(1, int(self.rng.normal(
-                state_config.wick_extension_avg,
-                state_config.wick_extension_avg * 0.5
-            )))
-            high_price += wick_ticks * self.TICK_SIZE
-        
-        if self.rng.random() < state_config.wick_probability:
-            # Lower wick
-            wick_ticks = max(1, int(self.rng.normal(
-                state_config.wick_extension_avg,
-                state_config.wick_extension_avg * 0.5
-            )))
-            low_price -= wick_ticks * self.TICK_SIZE
+        close_price = self.current_price
         
         # Generate volume (scaled by session and day)
         base_volume = max(
@@ -436,7 +648,8 @@ class PriceGenerator:
             base_volume *
             session_config.volume_multiplier *
             dow_config.volume_multiplier *
-            state_config.volatility_multiplier
+            state_config.volatility_multiplier *
+            time_mult
         )
         
         # Update current price for next bar
@@ -468,15 +681,13 @@ class PriceGenerator:
         # Update prev_close for next bar
         self.prev_close_ticks = close_ticks
         
-        return {
+        bar = {
             'time': timestamp,
-            # Price columns (floats)
             'open': open_price,
             'high': high_price,
             'low': low_price,
             'close': close_price,
             'volume': volume,
-            # Tick columns (integers) - ML-friendly
             'open_ticks': open_ticks,
             'high_ticks': high_ticks,
             'low_ticks': low_ticks,
@@ -486,10 +697,14 @@ class PriceGenerator:
             'body_ticks': body_ticks,
             'upper_wick_ticks': upper_wick_ticks,
             'lower_wick_ticks': lower_wick_ticks,
-            # State labels
             'state': state.value,
             'session': session.value,
         }
+        
+        # Update Planner History
+        self.planner.update_history(bar)
+        
+        return bar
     
     def generate_day(
         self,

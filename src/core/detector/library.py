@@ -260,6 +260,11 @@ def find_opening_orb_continuations(
     # For now we only take the first breakout; later we can extend to multiple
     first_bar = trigger.iloc[0]
     entry_time = trigger.index[0]
+    
+    # Restrict entry to within 60 minutes of OR end
+    if entry_time > or_end + pd.Timedelta(minutes=60):
+        return []
+        
     entry_price = float(first_bar["close"])
 
     if direction == "long":

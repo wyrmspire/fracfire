@@ -113,12 +113,16 @@ def plot_scenario(
     plot_candles(ax, df)
     overlay_trades(ax, result.outcomes)
     
-    title = f"Scenario: {result.metadata.get('source', 'unknown')} | Trades: {len(result.outcomes)}"
+    from matplotlib.dates import DateFormatter
+
+    title = f"Scenario: {filename_prefix} | Source: {result.metadata.get('source', 'unknown')} | Trades: {len(result.outcomes)}"
     ax.set_title(title)
     ax.set_xlabel("Time")
     ax.set_ylabel("Price")
     ax.grid(True, alpha=0.3)
     
+    # Format x-axis
+    ax.xaxis.set_major_formatter(DateFormatter('%H:%M'))
     fig.autofmt_xdate()
     
     # Save
