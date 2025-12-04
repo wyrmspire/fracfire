@@ -25,6 +25,10 @@ class SetupConfig:
     level_scalp: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
     ema20_vwap_revert: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
     ema200_continuation: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
+    breakout: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
+    reversal: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
+    opening_push: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
+    moc: SetupFamilyConfig = field(default_factory=SetupFamilyConfig)
 
 
 def run_setups(
@@ -56,9 +60,29 @@ def run_setups(
             library.run_ema20_vwap_revert_family(df_5m_ind, **cfg.ema20_vwap_revert.params)
         )
 
-    if cfg.ema200_continuation.enabled and hasattr(library, "run_ema200_continuation_family"):
+    if cfg.ema200_continuation.enabled:
         outcomes.extend(
             library.run_ema200_continuation_family(df_5m_ind, **cfg.ema200_continuation.params)
+        )
+    
+    if cfg.breakout.enabled:
+        outcomes.extend(
+            library.run_breakout_family(df_5m_ind, **cfg.breakout.params)
+        )
+    
+    if cfg.reversal.enabled:
+        outcomes.extend(
+            library.run_reversal_family(df_5m_ind, **cfg.reversal.params)
+        )
+    
+    if cfg.opening_push.enabled:
+        outcomes.extend(
+            library.run_opening_push_family(df_5m_ind, **cfg.opening_push.params)
+        )
+    
+    if cfg.moc.enabled:
+        outcomes.extend(
+            library.run_moc_family(df_5m_ind, **cfg.moc.params)
         )
 
     return outcomes
