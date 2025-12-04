@@ -1,10 +1,18 @@
 
 import numpy as np
 import pandas as pd
-import tensorflow as tf
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
+
+# Make tensorflow optional
+try:
+    import tensorflow as tf
+    TF_AVAILABLE = True
+except ImportError:
+    TF_AVAILABLE = False
+    tf = None
+
 
 @dataclass
 class TrajectoryPlan:
@@ -24,11 +32,14 @@ class FractalPlanner:
     
     def __init__(self, model_path: str = "out/fractal_net.keras"):
         self.model = None
-        try:
-            self.model = tf.keras.models.load_model(model_path)
-            print(f"FractalPlanner: Loaded model from {model_path}")
-        except Exception as e:
-            print(f"FractalPlanner: Failed to load model: {e}")
+        if TF_AVAILABLE:
+            try:
+                self.model = tf.keras.models.load_model(model_path)
+                print(f"FractalPlanner: Loaded model from {model_path}")
+            except Exception as e:
+                print(f"FractalPlanner: Failed to load model: {e}")
+        else:
+            print(f"FractalPlanner: TensorFlow not available, running without ML model")
             
         # History Buffers (DataFrames with OHLCV)
         self.history_1m = pd.DataFrame()
