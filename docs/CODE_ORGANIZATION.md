@@ -263,35 +263,58 @@ The following suggestions were made regarding the price generation system:
 - Session awareness
 - Markov chain transitions
 
-### 🔧 Improvements to Consider (Future Work)
+### ✅ Now Available as Optional Features (12/5/2024)
+- **Fat-tailed distribution** (Student-t) - Enable with `use_fat_tails=True`
+- **Volatility clustering** (GARCH-like) - Enable with `use_volatility_clustering=True`
 
-#### 1. **Replace Gaussian with Fat-Tailed Distributions**
-**Current Issue:** Uses `rng.normal()` which doesn't capture extreme moves
+**Important**: These are **optional configuration flags** that maintain backward compatibility. Default behavior is unchanged (uses Gaussian distribution).
 
-**Proposed Fix:**
+### 🔧 Future Improvements to Consider
+
+#### 1. **Fat-Tailed Distribution (Student-t)**
+**Status**: ✅ **IMPLEMENTED AS OPTION**
+
+Enable via `PhysicsConfig`:
 ```python
-# In src/core/generator/engine.py
-# Replace: tick_size = self.rng.normal(avg, std)
-# With: tick_size = self.rng.standard_t(df=3) * volatility_scale
+config = PhysicsConfig(
+    use_fat_tails=True,      # Enable Student-t (default: False)
+    fat_tail_df=3.0          # Degrees of freedom
+)
 ```
+
+**What changed:**
+- Added `_sample_distribution()` method that switches between Gaussian and Student-t
+- All three uses of `rng.normal()` now use this method
+- Backward compatible: default is `use_fat_tails=False` (uses Gaussian)
 
 **Benefit:** Captures "Black Swan" events and realistic market spikes
 
-**Priority:** HIGH - This would make training data more realistic
+**Priority:** ✅ COMPLETE - Available as optional feature
 
 #### 2. **Add Volatility Clustering (GARCH-like)**
-**Current Issue:** Volatility doesn't cluster (volatile bars don't lead to more volatile bars)
+**Status**: ✅ **IMPLEMENTED AS OPTION**
 
-**Proposed Implementation:** Add to `PhysicsSampler`:
+Enable via `PhysicsConfig`:
 ```python
-volatility_multiplier *= (1 + 0.3 * recent_volatility_zscore)
+config = PhysicsConfig(
+    use_volatility_clustering=True,  # Enable (default: False)
+    volatility_persistence=0.3       # Clustering strength
+)
 ```
+
+**What changed:**
+- Added `_apply_volatility_clustering()` method
+- Tracks `recent_volatility` as exponential moving average
+- Updates after each bar generation
+- Backward compatible: default is `use_volatility_clustering=False`
 
 **Benefit:** More realistic volatility patterns
 
-**Priority:** MEDIUM
+**Priority:** ✅ COMPLETE - Available as optional feature
 
 #### 3. **Self-Exciting Processes (Hawkes Process)**
+**Status**: 🔜 **NOT YET IMPLEMENTED**
+
 **Current Issue:** Events don't trigger more events
 
 **Proposed Implementation:**
@@ -305,6 +328,8 @@ if abs(recent_move) > threshold:
 **Priority:** MEDIUM
 
 #### 4. **Dynamic Transition Probabilities**
+**Status**: 🔜 **NOT YET IMPLEMENTED**
+
 **Current Issue:** State transition probabilities are fixed
 
 **Proposed Enhancement:** Make probabilities context-aware:
@@ -318,6 +343,8 @@ if recent_vix_proxy > 30:
 **Priority:** LOW - Current fixed probabilities work well
 
 #### 5. **Hybrid GAN Approach**
+**Status**: 🔜 **NOT YET IMPLEMENTED**
+
 **Concept:** Use current generator for structure, GAN for texture
 
 **Workflow:**
