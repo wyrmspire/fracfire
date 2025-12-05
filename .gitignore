@@ -73,6 +73,7 @@ out/charts/*.png
 out/charts/*.jpg
 out/models/*
 out/results/*
+out/test_visuals/*
 !out/charts/.gitkeep
 !out/models/.gitkeep
 !out/results/.gitkeep

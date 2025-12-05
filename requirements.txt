@@ -13,6 +13,8 @@ torch>=2.0.0  # PyTorch for deep learning models
 # Visualization
 matplotlib>=3.7.0
 seaborn>=0.12.0
+plotly>=5.18.0  # Interactive charts with shaded trade zones
+kaleido>=0.2.1  # For plotly PNG export
 
 # Data handling
 pyarrow>=12.0.0  # For efficient parquet files

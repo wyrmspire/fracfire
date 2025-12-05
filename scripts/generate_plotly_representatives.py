@@ -29,6 +29,7 @@ if PROJECT_ROOT not in sys.path:
 
 from src.core.generator.engine import PhysicsConfig, PriceGenerator
 from src.core.detector.indicators import IndicatorConfig, add_5m_indicators
+from src.core.visualization import COLORS, get_exit_time_or_fallback
 
 
 def generate_synth_1m(days: int, seed: int) -> pd.DataFrame:
@@ -51,7 +52,10 @@ def resample_5m(df_1m: pd.DataFrame) -> pd.DataFrame:
 
 
 def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, out_html: str, out_png: str):
+    """Plot 5m candles with trades showing shaded profit/loss zones and duration-limited SL/TP lines."""
     fig = go.Figure()
+    
+    # Add candlestick chart
     fig.add_trace(
         go.Candlestick(
             x=df_5m.index,
@@ -63,27 +67,102 @@ def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, ou
         )
     )
 
-    # overlay trades
+    # Overlay trades with shaded boxes and duration-limited lines
     for _, r in trades.iterrows():
-        t = pd.to_datetime(r["time"])  # time index in summary.csv
+        entry_time = pd.to_datetime(r["time"])
+        # Use shared utility for consistent fallback handling
+        exit_time = get_exit_time_or_fallback(entry_time, r.get("exit_time"))
+        
         entry = float(r["entry"])
         stop = float(r["stop"]) if not pd.isna(r["stop"]) else None
         target = float(r["target"]) if not pd.isna(r["target"]) else None
-        color = "green" if float(r["R"]) > 0 else "red"
-        fig.add_trace(go.Scatter(x=[t], y=[entry], mode="markers+text", marker=dict(color=color, size=10),
-                                 text=[f"{r['kind']}\nR={float(r['R']):.2f}"], textposition="top center", showlegend=False))
-        if stop is not None:
-            fig.add_trace(go.Scatter(x=[df_5m.index[0], df_5m.index[-1]], y=[stop, stop], mode="lines",
-                                     line=dict(color="firebrick", dash="dash"), showlegend=False))
+        r_multiple = float(r["R"])
+        color = "green" if r_multiple > 0 else "red"
+        
+        # Add shaded profit zone (green) - using consistent colors
         if target is not None:
-            fig.add_trace(go.Scatter(x=[df_5m.index[0], df_5m.index[-1]], y=[target, target], mode="lines",
-                                     line=dict(color="green", dash="dash"), showlegend=False))
+            profit_zone_y = [min(entry, target), max(entry, target)]
+            fig.add_trace(go.Scatter(
+                x=[entry_time, exit_time, exit_time, entry_time, entry_time],
+                y=[profit_zone_y[0], profit_zone_y[0], profit_zone_y[1], profit_zone_y[1], profit_zone_y[0]],
+                fill="toself",
+                fillcolor=f"rgba(38, 166, 154, {COLORS['profit_fill_alpha']})",  # Consistent with matplotlib
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+                name="_profit_zone"
+            ))
+        
+        # Add shaded stop loss zone (red) - using consistent colors
+        if stop is not None:
+            stop_zone_y = [min(entry, stop), max(entry, stop)]
+            fig.add_trace(go.Scatter(
+                x=[entry_time, exit_time, exit_time, entry_time, entry_time],
+                y=[stop_zone_y[0], stop_zone_y[0], stop_zone_y[1], stop_zone_y[1], stop_zone_y[0]],
+                fill="toself",
+                fillcolor=f"rgba(239, 83, 80, {COLORS['stop_fill_alpha']})",  # Consistent with matplotlib
+                line=dict(width=0),
+                showlegend=False,
+                hoverinfo="skip",
+                name="_stop_zone"
+            ))
+        
+        # Draw stop/target lines only for trade duration
+        if stop is not None:
+            fig.add_trace(go.Scatter(
+                x=[entry_time, exit_time], 
+                y=[stop, stop], 
+                mode="lines",
+                line=dict(color=COLORS["stop_line"], dash="dash", width=2),
+                showlegend=False,
+                hovertext=f"Stop Loss: {stop:.2f}",
+                name="_stop_line"
+            ))
+        if target is not None:
+            fig.add_trace(go.Scatter(
+                x=[entry_time, exit_time], 
+                y=[target, target], 
+                mode="lines",
+                line=dict(color=COLORS["profit_line"], dash="dash", width=2),
+                showlegend=False,
+                hovertext=f"Take Profit: {target:.2f}",
+                name="_target_line"
+            ))
+        
+        # Add entry marker with label
+        fig.add_trace(go.Scatter(
+            x=[entry_time], 
+            y=[entry], 
+            mode="markers+text", 
+            marker=dict(color=color, size=12, symbol="circle"),
+            text=[f"{r['kind']}<br>R={r_multiple:.2f}"], 
+            textposition="top center",
+            textfont=dict(size=10, color="#2c3e50"),
+            showlegend=False,
+            hovertext=f"Entry: {entry:.2f}<br>Exit: {exit_time}<br>R: {r_multiple:.2f}",
+            name="_entry"
+        ))
 
-    fig.update_layout(title=title, xaxis_rangeslider_visible=False, template="plotly_white", height=700, width=1400)
+    fig.update_layout(
+        title=title, 
+        xaxis_rangeslider_visible=False, 
+        template="plotly_white", 
+        height=700, 
+        width=1400,
+        xaxis_title="Time",
+        yaxis_title="Price",
+        hovermode="x unified"
+    )
+    
     os.makedirs(os.path.dirname(out_html), exist_ok=True)
     fig.write_html(out_html)
     # write image via kaleido
-    fig.write_image(out_png, engine="kaleido", scale=2)
+    try:
+        fig.write_image(out_png, engine="kaleido", scale=2)
+    except ImportError:
+        print(f"Warning: kaleido not installed, PNG export skipped. Install with: pip install kaleido")
+    except (ValueError, OSError) as e:
+        print(f"Warning: Could not save PNG: {e}")
 
 
 def pick_representative_windows(summary_df: pd.DataFrame) -> List[int]:
