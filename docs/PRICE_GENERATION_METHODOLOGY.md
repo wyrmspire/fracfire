@@ -267,7 +267,8 @@ config = PhysicsConfig(
 tick_size = self.rng.normal(avg, std)  # Smooth, predictable
 
 # When use_fat_tails=True:
-tick_size = self.rng.standard_t(df=3) * std + avg  # Fat tails, occasional spikes
+t_sample = self.rng.standard_t(df=3)
+tick_size = avg + t_sample * std  # Fat tails, occasional spikes
 ```
 
 #### 2. **Volatility Clustering (GARCH-like) - OPTIONAL**
@@ -278,7 +279,8 @@ Enable via `PhysicsConfig`:
 ```python
 config = PhysicsConfig(
     use_volatility_clustering=True,  # Enable clustering
-    volatility_persistence=0.3       # How much recent vol affects current (0-1)
+    volatility_persistence=0.3,      # How much recent vol affects current (0-1)
+    volatility_smoothing=0.3         # EMA smoothing factor for tracking (0-1)
 )
 ```
 
@@ -363,7 +365,8 @@ df = gen.generate_day(pd.Timestamp('2024-12-04'))
 # Enable GARCH-like behavior
 config = PhysicsConfig(
     use_volatility_clustering=True,
-    volatility_persistence=0.3  # 0.3 = moderate clustering
+    volatility_persistence=0.3,  # 0.3 = moderate clustering
+    volatility_smoothing=0.3     # EMA smoothing for tracking
 )
 gen = PriceGenerator(physics_config=config, seed=42)
 df = gen.generate_day(pd.Timestamp('2024-12-04'))
@@ -376,7 +379,8 @@ config = PhysicsConfig(
     use_fat_tails=True,
     fat_tail_df=3.0,
     use_volatility_clustering=True,
-    volatility_persistence=0.3
+    volatility_persistence=0.3,
+    volatility_smoothing=0.3
 )
 gen = PriceGenerator(physics_config=config, seed=42)
 df = gen.generate_day(pd.Timestamp('2024-12-04'))

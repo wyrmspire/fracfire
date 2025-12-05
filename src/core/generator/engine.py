@@ -67,6 +67,7 @@ class PhysicsConfig:
     # 7. Volatility Clustering Options (OPTIONAL - defaults to no clustering)
     use_volatility_clustering: bool = False # Enable GARCH-like volatility clustering
     volatility_persistence: float = 0.3     # How much recent volatility affects current (0-1)
+    volatility_smoothing: float = 0.3       # EMA smoothing factor for volatility tracking (0-1)
 
 
 @dataclass
@@ -358,6 +359,8 @@ class PriceGenerator:
         - If False (default): Uses normal distribution (smooth, no extreme moves)
         - If True: Uses Student-t distribution (fat tails, occasional spikes)
         
+        Uses NumPy's rng.standard_t() and rng.normal() implementations.
+        
         Args:
             mean: Mean/center of distribution
             std: Standard deviation/scale
@@ -366,7 +369,7 @@ class PriceGenerator:
             Sampled value
         """
         if self.physics.use_fat_tails:
-            # Student-t distribution with fat tails
+            # Student-t distribution with fat tails (NumPy implementation)
             # Lower df = fatter tails = more extreme moves
             t_sample = self.rng.standard_t(df=self.physics.fat_tail_df)
             return mean + t_sample * std
@@ -769,7 +772,7 @@ class PriceGenerator:
             # Measure this bar's volatility relative to baseline
             bar_volatility = range_ticks / max(1, state_config.avg_ticks_per_bar)
             # Exponential moving average of recent volatility
-            alpha = 0.3  # Smoothing factor
+            alpha = self.physics.volatility_smoothing
             self.recent_volatility = (1 - alpha) * self.recent_volatility + alpha * bar_volatility
         
         return bar
