@@ -141,16 +141,20 @@ def get_exit_time_or_fallback(
     Returns:
         Valid exit timestamp
     """
-    if exit_time_value is None:
+    # Helper to create fallback timestamp
+    def _make_fallback() -> pd.Timestamp:
         return entry_time + pd.Timedelta(minutes=fallback_minutes)
+    
+    if exit_time_value is None:
+        return _make_fallback()
     
     try:
         exit_ts = pd.Timestamp(exit_time_value)
         if pd.isna(exit_ts):
-            return entry_time + pd.Timedelta(minutes=fallback_minutes)
+            return _make_fallback()
         return exit_ts
     except (ValueError, TypeError):
-        return entry_time + pd.Timedelta(minutes=fallback_minutes)
+        return _make_fallback()
 
 
 def get_entry_marker_color(r_multiple: float, is_open: bool = False) -> str:

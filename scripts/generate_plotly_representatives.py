@@ -159,8 +159,10 @@ def plot_plotly_window(df_5m: pd.DataFrame, trades: pd.DataFrame, title: str, ou
     # write image via kaleido
     try:
         fig.write_image(out_png, engine="kaleido", scale=2)
-    except Exception as e:
-        print(f"Warning: Could not save PNG (kaleido may not be installed): {e}")
+    except ImportError:
+        print(f"Warning: kaleido not installed, PNG export skipped. Install with: pip install kaleido")
+    except (ValueError, OSError) as e:
+        print(f"Warning: Could not save PNG: {e}")
 
 
 def pick_representative_windows(summary_df: pd.DataFrame) -> List[int]:
