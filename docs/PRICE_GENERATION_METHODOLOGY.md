@@ -238,34 +238,69 @@ Real markets: `if aggressive_buyers > passive_sellers: price_up`
 
 **Impact**: Volume-Price Analysis (VPA) features like delta divergence will be artificial and won't train useful patterns.
 
-### Recommended Improvements
+### Available Improvements (Optional Features)
 
-#### 1. **Replace Gaussian with Student-t or Lévy Stable**
+These improvements are now **available as optional configuration flags** in `PhysicsConfig`. They are disabled by default to maintain backward compatibility, but can be enabled for more realistic market simulation.
 
+#### 1. **Fat-Tailed Distribution (Student-t) - OPTIONAL**
+
+**Status**: ✅ **Implemented as Option**
+
+Enable via `PhysicsConfig`:
 ```python
-# Current (problematic)
-tick_size = self.rng.normal(avg, std)
-
-# Improved (fat tails)
-tick_size = self.rng.standard_t(df=3) * volatility_scale
+config = PhysicsConfig(
+    use_fat_tails=True,      # Enable Student-t distribution
+    fat_tail_df=3.0          # Degrees of freedom (lower = fatter tails)
+)
 ```
 
-Student-t distribution with low degrees of freedom (df=3) produces fat tails, allowing for occasional extreme moves.
+**What it does:**
+- Replaces Gaussian sampling with Student-t distribution
+- Produces occasional extreme moves ("Black Swan" events)
+- More realistic volatility spikes compared to smooth Gaussian
 
-**Alternative**: Lévy stable distribution for even heavier tails.
+**Default**: `use_fat_tails=False` (maintains backward compatibility with Gaussian)
 
-#### 2. **Add GARCH-like Volatility Clustering**
-
-Volatility clusters: if last bar was volatile, next bar likely volatile too.
-
+**How it works:**
 ```python
-# Add to PhysicsSampler
-volatility_multiplier *= (1 + 0.3 * recent_volatility_zscore)
+# When use_fat_tails=False (default):
+tick_size = self.rng.normal(avg, std)  # Smooth, predictable
+
+# When use_fat_tails=True:
+tick_size = self.rng.standard_t(df=3) * std + avg  # Fat tails, occasional spikes
 ```
 
-This makes volatility "clump" together more realistically.
+#### 2. **Volatility Clustering (GARCH-like) - OPTIONAL**
 
-#### 3. **Implement Self-Exciting Processes (Hawkes Process)**
+**Status**: ✅ **Implemented as Option**
+
+Enable via `PhysicsConfig`:
+```python
+config = PhysicsConfig(
+    use_volatility_clustering=True,  # Enable clustering
+    volatility_persistence=0.3       # How much recent vol affects current (0-1)
+)
+```
+
+**What it does:**
+- Volatile bars tend to be followed by more volatile bars
+- Creates realistic "clumping" of volatility
+- Mimics GARCH behavior where volatility is autocorrelated
+
+**Default**: `use_volatility_clustering=False` (maintains backward compatibility)
+
+**How it works:**
+```python
+# Tracks recent volatility
+self.recent_volatility = exponential_moving_average(bar_volatility)
+
+# Applies clustering effect
+clustered_vol = base_vol * (1.0 + persistence * (recent_vol - 1.0))
+```
+
+#### 3. **Implement Self-Exciting Processes (Hawkes Process) - FUTURE**
+
+**Status**: 🔜 **Not Yet Implemented**
 
 Model how volatility events trigger more volatility:
 
@@ -276,7 +311,9 @@ if abs(recent_move) > threshold:
 
 This captures the "cascade" effect in real markets.
 
-#### 4. **Dynamic Transition Probabilities**
+#### 4. **Dynamic Transition Probabilities - FUTURE**
+
+**Status**: 🔜 **Not Yet Implemented**
 
 Make state transitions context-aware:
 
@@ -286,7 +323,9 @@ if recent_vix_proxy > 30:
     increase_probability(HourState.IMPULSIVE)
 ```
 
-#### 5. **Hybrid Approach: GAN Style Transfer**
+#### 5. **Hybrid Approach: GAN Style Transfer - FUTURE**
+
+**Status**: 🔜 **Not Yet Implemented**
 
 Best of both worlds:
 
@@ -297,6 +336,53 @@ Best of both worlds:
 ```
 Clean Generated Data + Real Market Noise/Texture = Best Training Data
 ```
+
+### Usage Examples
+
+#### Default Mode (Backward Compatible)
+```python
+# Uses Gaussian distribution - smooth, no extreme moves
+config = PhysicsConfig()  # All optional features disabled by default
+gen = PriceGenerator(physics_config=config, seed=42)
+df = gen.generate_day(pd.Timestamp('2024-12-04'))
+```
+
+#### Fat Tails Mode (Realistic Spikes)
+```python
+# Enable Student-t distribution for occasional extreme moves
+config = PhysicsConfig(
+    use_fat_tails=True,
+    fat_tail_df=3.0  # Lower = more extreme moves
+)
+gen = PriceGenerator(physics_config=config, seed=42)
+df = gen.generate_day(pd.Timestamp('2024-12-04'))
+```
+
+#### Volatility Clustering Mode
+```python
+# Enable GARCH-like behavior
+config = PhysicsConfig(
+    use_volatility_clustering=True,
+    volatility_persistence=0.3  # 0.3 = moderate clustering
+)
+gen = PriceGenerator(physics_config=config, seed=42)
+df = gen.generate_day(pd.Timestamp('2024-12-04'))
+```
+
+#### Full Realism Mode (Both Features)
+```python
+# Enable both fat tails and clustering for maximum realism
+config = PhysicsConfig(
+    use_fat_tails=True,
+    fat_tail_df=3.0,
+    use_volatility_clustering=True,
+    volatility_persistence=0.3
+)
+gen = PriceGenerator(physics_config=config, seed=42)
+df = gen.generate_day(pd.Timestamp('2024-12-04'))
+```
+
+**Note**: These are **optional enhancements**. The default behavior (both flags set to `False`) maintains backward compatibility with the original Gaussian-based generation.
 
 ## Current State vs. Old Code
 

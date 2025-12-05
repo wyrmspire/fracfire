@@ -59,6 +59,14 @@ class PhysicsConfig:
     # 5. Micro Physics
     wick_probability: float = 0.20          # Probability of extended wicks
     wick_extension_avg: float = 2.0         # Average wick extension in ticks
+    
+    # 6. Advanced Distribution Options (OPTIONAL - defaults to Gaussian for backward compatibility)
+    use_fat_tails: bool = False             # Enable Student-t distribution for fat tails (realistic spikes)
+    fat_tail_df: float = 3.0                # Degrees of freedom for Student-t (lower = fatter tails)
+    
+    # 7. Volatility Clustering Options (OPTIONAL - defaults to no clustering)
+    use_volatility_clustering: bool = False # Enable GARCH-like volatility clustering
+    volatility_persistence: float = 0.3     # How much recent volatility affects current (0-1)
 
 
 @dataclass
@@ -323,6 +331,9 @@ class PriceGenerator:
             np.random.seed(seed)
         
         self.rng = np.random.default_rng(seed)
+        
+        # Volatility clustering tracking
+        self.recent_volatility = 1.0  # Normalized volatility level (1.0 = baseline)
     
     def get_session(self, dt: datetime) -> Session:
         """Determine trading session based on time (Chicago time)"""
@@ -338,6 +349,52 @@ class PriceGenerator:
             return Session.RTH
         else:
             return Session.AFTERHOURS
+    
+    def _sample_distribution(self, mean: float, std: float) -> float:
+        """
+        Sample from either Gaussian (default) or Student-t (optional) distribution.
+        
+        This is configurable via PhysicsConfig.use_fat_tails flag.
+        - If False (default): Uses normal distribution (smooth, no extreme moves)
+        - If True: Uses Student-t distribution (fat tails, occasional spikes)
+        
+        Args:
+            mean: Mean/center of distribution
+            std: Standard deviation/scale
+            
+        Returns:
+            Sampled value
+        """
+        if self.physics.use_fat_tails:
+            # Student-t distribution with fat tails
+            # Lower df = fatter tails = more extreme moves
+            t_sample = self.rng.standard_t(df=self.physics.fat_tail_df)
+            return mean + t_sample * std
+        else:
+            # Standard Gaussian (backward compatible default)
+            return self.rng.normal(mean, std)
+    
+    def _apply_volatility_clustering(self, base_volatility: float) -> float:
+        """
+        Apply optional GARCH-like volatility clustering.
+        
+        If enabled, recent high volatility increases current volatility.
+        This creates realistic "clumping" of volatile periods.
+        
+        Args:
+            base_volatility: Base volatility multiplier
+            
+        Returns:
+            Adjusted volatility with clustering effect applied
+        """
+        if not self.physics.use_volatility_clustering:
+            return base_volatility
+        
+        # Apply clustering: current vol influenced by recent vol
+        clustered_vol = base_volatility * (
+            1.0 + self.physics.volatility_persistence * (self.recent_volatility - 1.0)
+        )
+        return max(0.1, clustered_vol)  # Floor to prevent collapse
     
     def generate_tick_movement(
         self,
@@ -382,9 +439,12 @@ class PriceGenerator:
             dow_config.volatility_multiplier
         )
         
+        # Apply optional volatility clustering
+        volatility = self._apply_volatility_clustering(volatility)
+        
         tick_size = max(
             1,
-            int(self.rng.normal(
+            int(self._sample_distribution(
                 state_config.avg_tick_size * volatility,
                 state_config.tick_size_std * volatility
             ))
@@ -598,7 +658,7 @@ class PriceGenerator:
         avg_ticks = state_config.avg_ticks_per_bar * self.physics.avg_ticks_per_bar / 8.0
         avg_ticks *= session_config.volume_multiplier * dow_config.volume_multiplier * time_mult
         
-        num_ticks = int(self.rng.normal(avg_ticks, state_config.ticks_per_bar_std))
+        num_ticks = int(self._sample_distribution(avg_ticks, state_config.ticks_per_bar_std))
         num_ticks = max(1, num_ticks) # At least 1 tick
         
         # 3. Generate Ticks
@@ -642,7 +702,7 @@ class PriceGenerator:
         # Generate volume (scaled by session and day)
         base_volume = max(
             10,
-            int(self.rng.normal(100, 50))
+            int(self._sample_distribution(100, 50))
         )
         volume = int(
             base_volume *
@@ -703,6 +763,14 @@ class PriceGenerator:
         
         # Update Planner History
         self.planner.update_history(bar)
+        
+        # Update volatility tracking for clustering (if enabled)
+        if self.physics.use_volatility_clustering:
+            # Measure this bar's volatility relative to baseline
+            bar_volatility = range_ticks / max(1, state_config.avg_ticks_per_bar)
+            # Exponential moving average of recent volatility
+            alpha = 0.3  # Smoothing factor
+            self.recent_volatility = (1 - alpha) * self.recent_volatility + alpha * bar_volatility
         
         return bar
     
