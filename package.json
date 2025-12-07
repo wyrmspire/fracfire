@@ -1,0 +1,35 @@
+{
+  "name": "fracfire",
+  "version": "1.0.0",
+  "description": "FracFire: Synthetic-to-Real MES Price Generator with AI Agent GUI",
+  "private": true,
+  "workspaces": [
+    "frontend"
+  ],
+  "scripts": {
+    "install": "npm install --workspaces",
+    "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
+    "dev:frontend": "cd frontend && npm run dev",
+    "dev:backend": "cd api && python main.py",
+    "build": "cd frontend && npm run build",
+    "preview": "cd frontend && npm run preview",
+    "start": "npm run dev"
+  },
+  "devDependencies": {
+    "concurrently": "^8.2.2"
+  },
+  "engines": {
+    "node": ">=18.0.0",
+    "npm": ">=9.0.0"
+  },
+  "keywords": [
+    "trading",
+    "quantitative-finance",
+    "machine-learning",
+    "synthetic-data",
+    "price-generation",
+    "AI"
+  ],
+  "author": "WyrmSpire",
+  "license": "MIT"
+}

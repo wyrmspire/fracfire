@@ -1,6 +1,6 @@
-# FracFire: Synthetic-to-Real MES Price Generator
+# FracFire: Synthetic-to-Real MES Price Generator with AI Agent GUI
 
-FracFire is a research platform for generating high-fidelity synthetic futures data (specifically MES/ES) to train machine learning models. It uses a "Physics Engine" approach where price action is generated tick-by-tick based on market states, sessions, and fractal patterns.
+FracFire is a comprehensive research platform for generating high-fidelity synthetic futures data (specifically MES/ES) to train machine learning models. It combines a "Physics Engine" approach for price generation with a modern React-based GUI for convenient tool access, charting, and model management.
 
 ## 🚀 Quick Start
 
@@ -8,18 +8,59 @@ FracFire is a research platform for generating high-fidelity synthetic futures d
 
 ```bash
 # Clone the repo
-git clone https://github.com/yourusername/fracfire.git
+git clone https://github.com/wyrmspire/fracfire.git
 cd fracfire
 
-# Create virtual environment
+# Install Python dependencies
 python -m venv .venv
 source .venv/bin/activate  # or .venv\Scripts\activate on Windows
-
-# Install dependencies
 pip install -r requirements.txt
+
+# Install Node.js dependencies for the GUI
+npm install
+
+# Start the application (runs both backend and frontend)
+npm run dev
 ```
 
-### 🎮 Developer Playground
+The application will be available at:
+- **Frontend GUI**: http://localhost:3000
+- **Backend API**: http://localhost:8000
+- **API Docs**: http://localhost:8000/docs
+
+### Alternative: Run Backend and Frontend Separately
+
+```bash
+# Terminal 1: Backend API
+cd api
+python main.py
+
+# Terminal 2: Frontend GUI
+cd frontend
+npm run dev
+```
+
+## 🎮 Using the GUI
+
+The FracFire GUI provides a user-friendly interface to:
+
+1. **Generate Synthetic Data**: Create price data with customizable parameters
+2. **Chart & Visualize**: Interactive multi-timeframe charting with TradingView-style controls
+3. **Manual Trade Lab**: Place and edit trades manually on the chart
+4. **Setup Detection**: Run automated setup analysis on your data
+5. **Model Training**: Train CNN and other ML models on your datasets
+6. **AI Assistant**: Chat with Gemini AI to execute complex workflows
+
+### Key Features
+
+- **Interactive Charting**: Zoom, pan, and switch timeframes (1m, 5m, 15m, 1h)
+- **Trade Placement**: Click to place LONG/SHORT trades with draggable TP/SL
+- **Data Management**: Upload, generate, and organize datasets
+- **Model Training**: Train models and run inference on new data
+- **Script Execution**: Run FracFire generator and analysis scripts from the GUI
+- **Export/Import**: Save and load trade setups as JSON
+
+## 🎮 Developer Playground (CLI Scripts)
 
 Run these scripts to see the system in action:
 
