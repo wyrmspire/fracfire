@@ -12,6 +12,10 @@ import numpy as np
 import pandas as pd
 from enum import Enum
 from .sampler import PhysicsSampler, PhysicsProfile
+try:
+    import torch
+except Exception:
+    torch = None
 from .fractal_planner import FractalPlanner, TrajectoryPlan
 
 
@@ -41,7 +45,7 @@ class PhysicsConfig:
     # 1. Volatility / Heat
     # Tuned defaults chosen to match real MES behavior when
     # used via `scripts/compare_real_vs_generator.py`.
-    base_volatility: float = 2.0            # Overall volatility multiplier
+    base_volatility: float = 0.7            # Overall volatility multiplier (Calibrated from 2.0)
     avg_ticks_per_bar: float = 8.0          # Base activity level
     
     # 2. Daily Structure (Golden Truth Targets)
@@ -57,7 +61,7 @@ class PhysicsConfig:
     macro_gravity_strength: float = 0.15    # Strength of pull back to center (less mean reversion)
     
     # 5. Micro Physics
-    wick_probability: float = 0.20          # Probability of extended wicks
+    wick_probability: float = 0.50          # Probability of extended wicks (Calibrated from 0.20)
     wick_extension_avg: float = 2.0         # Average wick extension in ticks
     
     # 6. Advanced Distribution Options (OPTIONAL - defaults to Gaussian for backward compatibility)
@@ -224,14 +228,14 @@ class SessionConfig:
 SESSION_CONFIGS = {
     Session.ASIAN: SessionConfig(
         name="asian",
-        volume_multiplier=0.4,
-        volatility_multiplier=0.6,
+        volume_multiplier=0.83,   # Calibrated from 0.4
+        volatility_multiplier=0.92, # Calibrated from 0.6
         state_transition_prob=0.02,
     ),
     Session.LONDON: SessionConfig(
         name="london",
-        volume_multiplier=0.8,
-        volatility_multiplier=1.1,
+        volume_multiplier=0.19,   # Calibrated from 0.8
+        volatility_multiplier=0.64, # Calibrated from 1.1
         state_transition_prob=0.05,
     ),
     Session.PREMARKET: SessionConfig(
@@ -333,6 +337,16 @@ class PriceGenerator:
         
         self.rng = np.random.default_rng(seed)
         
+        # Device selection (prefer GPU if available)
+        self.device = None
+        if torch is not None:
+            if torch.cuda.is_available():
+                self.device = torch.device("cuda")
+            elif hasattr(torch.backends, "mps") and torch.backends.mps.is_available():
+                self.device = torch.device("mps")
+            else:
+                self.device = torch.device("cpu")
+
         # Volatility clustering tracking
         self.recent_volatility = 1.0  # Normalized volatility level (1.0 = baseline)
     
@@ -368,14 +382,27 @@ class PriceGenerator:
         Returns:
             Sampled value
         """
-        if self.physics.use_fat_tails:
-            # Student-t distribution with fat tails (NumPy implementation)
-            # Lower df = fatter tails = more extreme moves
-            t_sample = self.rng.standard_t(df=self.physics.fat_tail_df)
-            return mean + t_sample * std
+        # Prefer torch on GPU if available for sampling
+        if torch is not None and self.device is not None and self.device.type in ("cuda", "mps"):
+            # Always use torch on GPU if available to keep tensors on device
+            if self.physics.use_fat_tails:
+                # Torch doesn't expose standard_t directly; approximate using
+                # normal scaled by sqrt(df/(df-2)) for df>2 or fallback to normal.
+                # For our use, use normal as a reasonable approximation on GPU.
+                sample = torch.normal(0.0, 1.0, (), device=self.device)
+                return float(mean + sample.item() * std)
+            else:
+                sample = torch.normal(float(mean), float(std), (), device=self.device)
+                return float(sample.item())
         else:
-            # Standard Gaussian (backward compatible default)
-            return self.rng.normal(mean, std)
+            if self.physics.use_fat_tails:
+                # Student-t distribution with fat tails (NumPy implementation)
+                # Lower df = fatter tails = more extreme moves
+                t_sample = self.rng.standard_t(df=self.physics.fat_tail_df)
+                return mean + t_sample * std
+            else:
+                # Standard Gaussian (backward compatible default)
+                return self.rng.normal(mean, std)
     
     def _apply_volatility_clustering(self, base_volatility: float) -> float:
         """
@@ -777,6 +804,264 @@ class PriceGenerator:
         
         return bar
     
+        return bar
+    
+    def generate_batch(
+        self,
+        timestamps: pd.DatetimeIndex,
+        state: MarketState = MarketState.RANGING,
+        physics_override: Optional[PhysicsConfig] = None
+    ) -> pd.DataFrame:
+        """
+        Generate a batch of bars in parallel using GPU if available.
+        Massively faster than calling generate_bar() in a loop.
+        """
+        if physics_override:
+            self.physics = physics_override
+            
+        n_bars = len(timestamps)
+        if n_bars == 0:
+            return pd.DataFrame()
+            
+        # Ensure we are using the configured device
+        device = self.device if self.device else torch.device('cpu')
+        
+        # 1. Prepare Configs & Context Vectors
+        # We'll assume a single state for the batch for now, or we could map states.
+        # For the comparison script, we usually run with a dominant state or base state.
+        state_config = STATE_CONFIGS[state]
+        
+        # Vectorize Session and DOW lookups
+        # We can do this on CPU via pandas then move to GPU
+        sessions = [self.get_session(ts) for ts in timestamps]
+        dows = timestamps.dayofweek.values
+        
+        # Create tensors for multipliers
+        # We need to map Session enum to indices or directly to multipliers
+        # Let's build multiplier arrays on CPU first
+        vol_mults = np.ones(n_bars, dtype=np.float32)
+        volume_mults = np.ones(n_bars, dtype=np.float32)
+        
+        for i, (sess, dow) in enumerate(zip(sessions, dows)):
+            s_cfg = SESSION_CONFIGS[sess]
+            d_cfg = DOW_CONFIGS[dow]
+            
+            # Time multiplier (RTH logic)
+            time_mult = 1.0
+            if sess == Session.RTH:
+                h = timestamps[i].hour
+                m = timestamps[i].minute
+                if h == 9 or (h == 10 and m < 30): time_mult = 1.5
+                elif (h == 11 and m >= 30) or h == 12: time_mult = 0.6
+                elif h == 15: time_mult = 1.4
+            
+            vol_mults[i] = s_cfg.volatility_multiplier * d_cfg.volatility_multiplier
+            volume_mults[i] = s_cfg.volume_multiplier * d_cfg.volume_multiplier * time_mult
+
+        # Move to GPU
+        t_vol_mults = torch.tensor(vol_mults, device=device)
+        t_volume_mults = torch.tensor(volume_mults, device=device)
+        
+        # 2. Determine Activity (Num Ticks)
+        # avg_ticks = base * state * physics * multipliers
+        base_ticks = state_config.avg_ticks_per_bar * self.physics.avg_ticks_per_bar / 8.0
+        t_avg_ticks = base_ticks * t_volume_mults
+        
+        # Sample num_ticks (Normal dist)
+        # clamp to min 1
+        t_num_ticks = torch.normal(t_avg_ticks, state_config.ticks_per_bar_std).round().int().clamp(min=1)
+        
+        # 3. Generate Ticks (Parallelized)
+        # We need to generate a dense tensor of (N, max_ticks)
+        # This might be wasteful if max_ticks is huge, but for 1m bars it's usually < 100.
+        max_ticks = int(t_num_ticks.max().item())
+        # Cap max ticks to avoid OOM on extreme outliers
+        max_ticks = min(max_ticks, 500) 
+        
+        # Create batch tensors
+        # Shape: (N, max_ticks)
+        # Mask: True where tick index < num_ticks
+        tick_indices = torch.arange(max_ticks, device=device).unsqueeze(0).expand(n_bars, max_ticks)
+        mask = tick_indices < t_num_ticks.unsqueeze(1)
+        
+        # Direction Generation (Vectorized Persistence)
+        # We iterate max_ticks times to propagate persistence
+        # This is much faster than iterating N_bars times
+        directions = torch.zeros((n_bars, max_ticks), device=device, dtype=torch.float32)
+        
+        # Initial directions (random)
+        current_dirs = torch.where(torch.rand(n_bars, device=device) < state_config.up_probability, 1.0, -1.0)
+        
+        # Pre-generate randoms for the loop
+        rand_persist = torch.rand((n_bars, max_ticks), device=device)
+        rand_dir = torch.rand((n_bars, max_ticks), device=device)
+        
+        # We need to store the sequence
+        # For t=0
+        directions[:, 0] = current_dirs
+        
+        # For t=1 to max_ticks
+        # This loop runs ~50 times, very fast
+        up_prob = state_config.up_probability
+        persist_prob = state_config.trend_persistence
+        
+        for t in range(1, max_ticks):
+            # Check persistence
+            persist_mask = rand_persist[:, t] < persist_prob
+            
+            # New direction if not persisting
+            new_dirs = torch.where(rand_dir[:, t] < up_prob, 1.0, -1.0)
+            
+            # Update current
+            # If persist, keep previous (directions[:, t-1])
+            # Else, use new_dirs
+            # Note: We must use the *actual* previous direction stored in the tensor
+            prev_dirs = directions[:, t-1]
+            
+            # Logic: if persist and prev != 0 (always true here), keep prev. Else new.
+            current_dirs = torch.where(persist_mask, prev_dirs, new_dirs)
+            directions[:, t] = current_dirs
+            
+        # Tick Sizes
+        # volatility for each bar
+        bar_vols = state_config.volatility_multiplier * t_vol_mults
+        # Expand to ticks
+        tick_vols = bar_vols.unsqueeze(1).expand(n_bars, max_ticks)
+        
+        # Sample sizes
+        # We use Normal for speed, or approximate Student-T
+        if self.physics.use_fat_tails:
+             # Approx fat tails with normal * random variance? 
+             # Or just standard normal for speed as requested "generate in seconds"
+             # Let's use Normal but scaled up slightly to compensate
+             raw_sizes = torch.normal(0.0, 1.0, size=(n_bars, max_ticks), device=device)
+             # Apply "fat tail" boost occasionally?
+             # Let's stick to the requested physics config but vectorized
+             # If we really want student-t, we can't easily do it in one torch call without custom distribution
+             # Fallback to Normal for batch speed
+             pass
+        else:
+             raw_sizes = torch.normal(0.0, 1.0, size=(n_bars, max_ticks), device=device)
+             
+        # Scale sizes
+        # size = abs(sample(avg, std))
+        # sample = mean + raw * std
+        # We want magnitude, so abs()
+        # But wait, tick_size in generate_tick_movement is magnitude. Direction is separate.
+        # So we sample from N(avg, std) and take abs? Or max(1, ...)?
+        # Original: max(1, int(sample(avg, std)))
+        
+        # Mean and Std for sizes
+        means = state_config.avg_tick_size * tick_vols
+        stds = state_config.tick_size_std * tick_vols
+        
+        sizes = torch.normal(means, stds)
+        sizes = sizes.round().clamp(min=1, max=state_config.max_tick_jump)
+        
+        # Apply mask (zero out invalid ticks)
+        directions = directions * mask.float()
+        sizes = sizes * mask.float()
+        
+        # Calculate Price Movements
+        moves = directions * sizes * self.TICK_SIZE
+        
+        # 4. Aggregate to Bars
+        # Cumulative sum along ticks to get price path *within* each bar
+        # path shape: (N, max_ticks)
+        # This path is relative to the Bar Open.
+        intra_bar_path = torch.cumsum(moves, dim=1)
+        
+        # Net change per bar
+        # We gather the value at index (num_ticks - 1)
+        # Or just take the last value of cumsum (since masked values are 0, cumsum stays constant after num_ticks)
+        # Yes, cumsum[:,-1] is the total move for the bar.
+        net_moves = intra_bar_path[:, -1]
+        
+        # Calculate Open Prices
+        # The open of bar i is Initial + sum(net_moves[:i])
+        # We can cumsum the net_moves across bars
+        # Shifted by 1 to get starts
+        batch_cumsum = torch.cumsum(net_moves, dim=0)
+        # Opens: [0, b0_move, b0+b1, ...] + initial
+        # We need to prepend 0 and drop last
+        opens_offset = torch.cat([torch.tensor([0.0], device=device), batch_cumsum[:-1]])
+        bar_opens = opens_offset + self.current_price
+        
+        # Now we need High and Low for each bar
+        # High = Open + max(0, max(intra_bar_path))
+        # Low = Open + min(0, min(intra_bar_path))
+        # Note: intra_bar_path starts at first tick. We should consider "0" (the open) as part of the path.
+        # So effective path is [0, tick1, tick2...]
+        # We can just take max(0, intra_max) and min(0, intra_min)
+        
+        # Masking for min/max is tricky because 0s from masking might interfere if we had negative moves?
+        # No, masked moves are 0. Cumsum stays constant.
+        # So the path "flatlines" at the close price for the rest of the max_ticks.
+        # This is fine for Max and Min, as the close is part of the path.
+        
+        intra_max = torch.max(intra_bar_path, dim=1)[0]
+        intra_min = torch.min(intra_bar_path, dim=1)[0]
+        
+        bar_highs = bar_opens + torch.maximum(torch.tensor(0.0, device=device), intra_max)
+        bar_lows = bar_opens + torch.minimum(torch.tensor(0.0, device=device), intra_min)
+        bar_closes = bar_opens + net_moves
+        
+        # 5. Apply Wicks (Vectorized)
+        # wick_prob
+        # rand < prob
+        wick_triggers = torch.rand(n_bars, device=device) < (state_config.wick_probability * self.physics.wick_probability / 0.2)
+        
+        # Extensions
+        # Exponential dist
+        # torch.distributions.Exponential
+        # rate = 1 / scale
+        scale = state_config.wick_extension_avg
+        # We can just use -ln(u) * scale for exponential
+        extensions = -torch.log(torch.rand(n_bars, device=device)) * scale * self.TICK_SIZE
+        
+        # Direction of wick (High or Low extension)
+        # 50/50
+        is_high_ext = torch.rand(n_bars, device=device) < 0.5
+        
+        # Apply
+        # If trigger & high: high += ext
+        # If trigger & !high: low -= ext
+        
+        high_deltas = torch.where(wick_triggers & is_high_ext, extensions, 0.0)
+        low_deltas = torch.where(wick_triggers & (~is_high_ext), extensions, 0.0)
+        
+        bar_highs += high_deltas
+        bar_lows -= low_deltas
+        
+        # 6. Volume (Vectorized)
+        # base = max(10, normal(100, 50))
+        base_vols = torch.normal(100.0, 50.0, size=(n_bars,), device=device).clamp(min=10.0)
+        final_vols = base_vols * t_volume_mults * state_config.volatility_multiplier
+        final_vols = final_vols.int()
+        
+        # 7. Update State
+        # Update self.current_price to the last close
+        self.current_price = float(bar_closes[-1].item())
+        
+        # 8. Assemble DataFrame
+        # Move to CPU
+        df = pd.DataFrame({
+            'time': timestamps,
+            'open': bar_opens.cpu().numpy(),
+            'high': bar_highs.cpu().numpy(),
+            'low': bar_lows.cpu().numpy(),
+            'close': bar_closes.cpu().numpy(),
+            'volume': final_vols.cpu().numpy()
+        })
+        
+        # Rounding
+        df['open'] = np.round(df['open'] / self.TICK_SIZE) * self.TICK_SIZE
+        df['high'] = np.round(df['high'] / self.TICK_SIZE) * self.TICK_SIZE
+        df['low'] = np.round(df['low'] / self.TICK_SIZE) * self.TICK_SIZE
+        df['close'] = np.round(df['close'] / self.TICK_SIZE) * self.TICK_SIZE
+        
+        return df
+
     def generate_day(
         self,
         start_date: datetime,

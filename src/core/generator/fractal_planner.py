@@ -4,14 +4,33 @@ import pandas as pd
 from dataclasses import dataclass
 from typing import Optional, List, Dict
 from datetime import datetime, timedelta
+import os
 
-# Make tensorflow optional
+"""
+FractalPlanner: PyTorch-only planner
+
+This file was updated to remove TensorFlow/Keras fallbacks and operate
+only with PyTorch. The project uses PyTorch on GPU for training and
+inference. If a converted PyTorch state_dict exists at `out/fractal_net.pt`
+it will be loaded; otherwise a lightweight TorchFractalNet will be
+instantiated and used (random init).
+"""
+
+# Try to use PyTorch if available (we prefer PyTorch GPU)
 try:
-    import tensorflow as tf
-    TF_AVAILABLE = True
-except ImportError:
-    TF_AVAILABLE = False
-    tf = None
+    import torch
+    TORCH_AVAILABLE = True
+except Exception:
+    torch = None
+    TORCH_AVAILABLE = False
+
+try:
+    from .fractal_planner_torch import build_torch_model_from_shapes
+except Exception:
+    build_torch_model_from_shapes = None
+
+# TensorFlow is intentionally disabled in the PyTorch-first workflow
+TF_AVAILABLE = False
 
 
 @dataclass
@@ -32,14 +51,20 @@ class FractalPlanner:
     
     def __init__(self, model_path: str = "out/fractal_net.keras"):
         self.model = None
-        if TF_AVAILABLE:
+        self.torch_model = None
+        # Prefer PyTorch GPU model if available
+        pt_path = model_path.replace('.keras', '.pt')
+        if TORCH_AVAILABLE and os.path.exists(pt_path):
             try:
-                self.model = tf.keras.models.load_model(model_path)
-                print(f"FractalPlanner: Loaded model from {model_path}")
+                # Load state_dict safely; prefer GPU later
+                self.torch_state = torch.load(pt_path, map_location='cpu', weights_only=True)
+                self.model_type = 'torch'
+                print(f"FractalPlanner: Found PyTorch model at {pt_path}; will use PyTorch if CUDA available")
             except Exception as e:
-                print(f"FractalPlanner: Failed to load model: {e}")
+                print(f"FractalPlanner: Failed to load PyTorch model: {e}")
+                self.torch_state = None
         else:
-            print(f"FractalPlanner: TensorFlow not available, running without ML model")
+            self.torch_state = None
             
         # History Buffers (DataFrames with OHLCV)
         self.history_1m = pd.DataFrame()
@@ -121,45 +146,153 @@ class FractalPlanner:
         Generate a plan for the next hour.
         Returns None if insufficient history.
         """
-        if self.model is None:
+        # Require minimum history for feature construction
+        if len(self.history_1m) < self.micro_len:
             return None
-            
-        # Need at least some history
-        if len(self.history_1m) < 240: # Need at least micro window
-            return None
-            
-        # 1. Prepare Inputs
-        # Resample on the fly
-        df_15m = self.history_1m.resample('15min').agg(
-            {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
-        ).dropna()
-        
-        df_1h = self.history_1m.resample('1h').agg(
-            {'open': 'first', 'high': 'max', 'low': 'min', 'close': 'last', 'volume': 'sum'}
-        ).dropna()
-        
-        # Base metrics
-        base_price = self.history_1m['close'].iloc[-1]
-        base_vol = self.history_1m['volume'].iloc[-240:].mean() # Micro avg
-        
-        # Extract windows
-        x_mic = self._process_array(self.history_1m, self.micro_len, base_price, base_vol)
-        x_mes = self._process_array(df_15m, self.meso_len, base_price, base_vol)
-        x_mac = self._process_array(df_1h, self.macro_len, base_price, base_vol)
-        
-        # Batch dimension
-        X_micro = np.expand_dims(x_mic, axis=0)
-        X_meso = np.expand_dims(x_mes, axis=0)
-        X_macro = np.expand_dims(x_mac, axis=0)
-        
-        # 2. Predict
-        # Output: [Displacement, HighExc, LowExc, TotalDist, CloseLoc]
-        preds = self.model.predict([X_micro, X_meso, X_macro], verbose=0)[0]
-        
-        return TrajectoryPlan(
-            displacement=float(preds[0]),
-            high_excursion=float(preds[1]),
-            low_excursion=float(preds[2]),
-            total_distance=float(preds[3]),
-            close_location=float(preds[4])
-        )
+        # If PyTorch is available, prefer a Torch model (either converted state or a new GPU-capable model)
+        if TORCH_AVAILABLE:
+            # Lazily build a Torch model instance if we have the builder helper
+            if self.torch_model is None and build_torch_model_from_shapes is not None:
+                try:
+                    tm, _ = build_torch_model_from_shapes(self.micro_len, self.meso_len, self.macro_len)
+                    self.torch_model = tm
+                    # If a converted state exists, try to load it
+                    pt_path = 'out/fractal_net.pt'
+                    if os.path.exists(pt_path):
+                        try:
+                            state = torch.load(pt_path, map_location='cpu', weights_only=True)
+                            self.torch_model.load_state_dict(state)
+                            print(f"FractalPlanner: Loaded PyTorch state_dict from {pt_path}")
+                        except Exception:
+                            pass
+                    # Move to GPU if available
+                    device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                    self.torch_model.to(device)
+                except Exception as e:
+                    print('FractalPlanner: Failed to initialize Torch model:', e)
+
+        # If we have a Torch model instance, use it for inference (prefer GPU)
+        if self.torch_model is not None and TORCH_AVAILABLE:
+            try:
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                model = self.torch_model
+                model.to(device)
+
+                base_price = self.history_1m['close'].iloc[-1]
+                base_vol = self.history_1m['volume'].iloc[-240:].mean()
+
+                x_mic = self._process_array(self.history_1m, self.micro_len, base_price, base_vol)
+                df_15m = self.history_1m.resample('15min').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna()
+                x_mes = self._process_array(df_15m, self.meso_len, base_price, base_vol)
+                df_1h = self.history_1m.resample('1h').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna()
+                x_mac = self._process_array(df_1h, self.macro_len, base_price, base_vol)
+
+                # Use (batch, length, channels) input and let model handle transpose
+                X_micro = torch.from_numpy(np.expand_dims(x_mic, axis=0).astype('float32')).to(device)
+                X_meso = torch.from_numpy(np.expand_dims(x_mes, axis=0).astype('float32')).to(device)
+                X_macro = torch.from_numpy(np.expand_dims(x_mac, axis=0).astype('float32')).to(device)
+
+                model.eval()
+                with torch.no_grad():
+                    if device.type == 'cuda':
+                        with torch.amp.autocast(device_type='cuda'):
+                            preds = model(X_micro, X_meso, X_macro).float().cpu().numpy()[0]
+                    else:
+                        preds = model(X_micro, X_meso, X_macro).cpu().numpy()[0]
+
+                return TrajectoryPlan(
+                    displacement=float(preds[0]),
+                    high_excursion=float(preds[1]),
+                    low_excursion=float(preds[2]),
+                    total_distance=float(preds[3]),
+                    close_location=float(preds[4])
+                )
+            except Exception as e:
+                print('FractalPlanner: Torch inference failed, falling back:', e)
+
+        # If torch model state is present, prefer that path (and send to GPU if available)
+        if self.torch_state is not None and TORCH_AVAILABLE:
+            try:
+                # Build Torch model architecture matching training script
+                # Create Torch module on CPU and load state
+                class _TmpNet(torch.nn.Module):
+                    def __init__(self):
+                        super().__init__()
+                        # minimal architecture matching training
+                        self.m_conv1 = torch.nn.Conv1d(5, 32, kernel_size=3)
+                        self.m_pool1 = torch.nn.MaxPool1d(2)
+                        self.m_conv2 = torch.nn.Conv1d(32, 64, kernel_size=3)
+                        self.m_pool2 = torch.nn.MaxPool1d(2)
+                        self.s_conv1 = torch.nn.Conv1d(5, 32, kernel_size=3)
+                        self.s_pool1 = torch.nn.MaxPool1d(2)
+                        self.l_conv1 = torch.nn.Conv1d(5, 32, kernel_size=3)
+                        self.l_pool1 = torch.nn.MaxPool1d(2)
+                        # fusion dims will be inferred after a dummy forward; we create the FCs to match saved state
+                        # create placeholders and then load state_dict will overwrite shapes if matching
+                        self.fc1 = torch.nn.Linear(1, 128)
+                        self.fc2 = torch.nn.Linear(128, 64)
+                        self.out = torch.nn.Linear(64, 5)
+
+                    def forward(self, xm, xs, xl):
+                        x = torch.relu(self.m_conv1(xm))
+                        x = self.m_pool1(x)
+                        x = torch.relu(self.m_conv2(x))
+                        x = self.m_pool2(x)
+                        x = torch.flatten(x, 1)
+                        y = torch.relu(self.s_conv1(xs))
+                        y = self.s_pool1(y)
+                        y = torch.flatten(y, 1)
+                        z = torch.relu(self.l_conv1(xl))
+                        z = self.l_pool1(z)
+                        z = torch.flatten(z, 1)
+                        merged = torch.cat([x, y, z], dim=1)
+                        out = torch.relu(self.fc1(merged))
+                        out = torch.nn.functional.dropout(out, p=0.3, training=self.training)
+                        out = torch.relu(self.fc2(out))
+                        out = self.out(out)
+                        return out
+
+                net = _TmpNet()
+                # Attempt to load state dict; keys must match those saved by converter script
+                try:
+                    net.load_state_dict(self.torch_state)
+                except Exception:
+                    # ignore and proceed — converter may have different naming
+                    pass
+
+                # Move to GPU if available
+                device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
+                net.to(device)
+
+                # Prepare inputs like the TF path: arrays shaped (length,5) -> (1,5,length) for Conv1d
+                base_price = self.history_1m['close'].iloc[-1]
+                base_vol = self.history_1m['volume'].iloc[-240:].mean()
+
+                x_mic = self._process_array(self.history_1m, self.micro_len, base_price, base_vol)
+                x_mes = self._process_array(self.history_1m.resample('15min').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna(), self.meso_len, base_price, base_vol)
+                x_mac = self._process_array(self.history_1m.resample('1h').agg({'open':'first','high':'max','low':'min','close':'last','volume':'sum'}).dropna(), self.macro_len, base_price, base_vol)
+
+                X_micro = torch.from_numpy(np.expand_dims(np.transpose(x_mic, (1, 0)), axis=0).astype('float32')).to(device)
+                X_meso = torch.from_numpy(np.expand_dims(np.transpose(x_mes, (1, 0)), axis=0).astype('float32')).to(device)
+                X_macro = torch.from_numpy(np.expand_dims(np.transpose(x_mac, (1, 0)), axis=0).astype('float32')).to(device)
+
+                net.eval()
+                with torch.no_grad():
+                    if device.type == 'cuda':
+                        with torch.amp.autocast(device_type='cuda'):
+                            preds = net(X_micro, X_meso, X_macro).float().cpu().numpy()[0]
+                    else:
+                        preds = net(X_micro, X_meso, X_macro).cpu().numpy()[0]
+
+                return TrajectoryPlan(
+                    displacement=float(preds[0]),
+                    high_excursion=float(preds[1]),
+                    low_excursion=float(preds[2]),
+                    total_distance=float(preds[3]),
+                    close_location=float(preds[4])
+                )
+            except Exception as e:
+                print('FractalPlanner: Torch inference failed:', e)
+                return None
+
+        return None

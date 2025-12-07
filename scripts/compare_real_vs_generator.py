@@ -64,13 +64,10 @@ def generate_synthetic_matching(real_1m: pd.DataFrame, seed: int, physics_overri
         physics_config=physics,
     )
 
-    bars = []
-    # Iterate over the real index and generate bars at the exact same timestamps
-    for ts in real_1m.index:
-        bar = gen.generate_bar(ts)
-        bars.append(bar)
-
-    synth = pd.DataFrame(bars)
+    # Use the new vectorized batch generation
+    # This generates all bars in one go on GPU if available
+    synth = gen.generate_batch(real_1m.index)
+    
     synth.set_index("time", inplace=True)
     synth.sort_index(inplace=True)
     return synth[["open", "high", "low", "close", "volume"]]
@@ -87,14 +84,15 @@ def plot_candlesticks(ax, df, title):
     colors = [up_color if c >= o else down_color for c, o in zip(df['close'], df['open'])]
     
     # Plot wicks
-    ax.vlines(df.index, df['low'], df['high'], color=wick_color, linewidth=1, alpha=0.6)
+    # Use integer index for x-axis to avoid gaps (weekends)
+    x = np.arange(len(df))
+    
+    # Plot wicks
+    ax.vlines(x, df['low'], df['high'], color=wick_color, linewidth=1, alpha=0.6)
     
     # Plot bodies
-    if len(df) > 1:
-        min_diff = (df.index[1] - df.index[0]).total_seconds()
-        width = min_diff / 86400 * 0.8
-    else:
-        width = 0.0005
+    # Fixed width since we are on integer axis
+    width = 0.6
         
     # Matplotlib bar chart for bodies
     bottoms = df[['open', 'close']].min(axis=1)
@@ -103,7 +101,17 @@ def plot_candlesticks(ax, df, title):
     # Ensure minimum height for dojis so they are visible
     heights = heights.replace(0, 0.01)
     
-    ax.bar(df.index, heights, bottom=bottoms, width=width, color=colors, align='center')
+    ax.bar(x, heights, bottom=bottoms, width=width, color=colors, align='center')
+    
+    # Format X-axis to show dates
+    # Show max 10 ticks
+    n_ticks = 10
+    if len(df) > n_ticks:
+        step = len(df) // n_ticks
+        ticks = x[::step]
+        labels = [df.index[i].strftime('%Y-%m-%d %H:%M') for i in ticks]
+        ax.set_xticks(ticks)
+        ax.set_xticklabels(labels, rotation=30, ha='right')
     
     ax.set_title(title)
     ax.grid(True, alpha=0.2)
@@ -204,7 +212,16 @@ def pick_real_windows(real_1m: pd.DataFrame, week_days: int = 7, quarter_days: i
         start_w = 0
         real_w = real_1m.iloc[start_w : start_w + week_bars].copy()
 
-    return real_w, real_q
+    # 1-day window (Zoomed in): pick a random day from within the week window
+    day_bars = 24 * 60
+    if len(real_w) >= day_bars:
+        max_start_day = len(real_w) - day_bars
+        start_d = np.random.randint(0, max_start_day)
+        real_d = real_w.iloc[start_d : start_d + day_bars].copy()
+    else:
+        real_d = real_w.copy()
+
+    return real_w, real_q, real_d
 
 
 def main(argv=None) -> None:
@@ -281,12 +298,15 @@ def main(argv=None) -> None:
             if len(real_slice) == 0:
                 raise ValueError(f"No real data found around week_start={args.week_start}")
             real_week_1m = real_slice.copy()
-            _, real_quarter_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
+            # For fixed week, just pick the first day as the day slice
+            real_day_1m = real_week_1m.iloc[:24*60].copy()
+            _, real_quarter_1m, _ = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
         else:
-            real_week_1m, real_quarter_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
+            real_week_1m, real_quarter_1m, real_day_1m = pick_real_windows(real_1m_ohlcv, week_days=args.week_days, quarter_days=args.quarter_days)
 
         synth_week_1m = generate_synthetic_matching(real_week_1m, seed_week, physics_overrides=physics_overrides)
         synth_quarter_1m = generate_synthetic_matching(real_quarter_1m, seed_quarter, physics_overrides=physics_overrides)
+        synth_day_1m = generate_synthetic_matching(real_day_1m, seed_week, physics_overrides=physics_overrides) # Use same seed as week for consistency
 
         # Aggregate to 5m and 15m; we do NOT plot 1m
         real_week_5m = resample_ohlcv(real_week_1m, "5min")
@@ -342,6 +362,11 @@ def main(argv=None) -> None:
                 'stats_real': json.dumps(stats_real),
                 'stats_synth': json.dumps(stats_synth),
             })
+            
+        # Day charts: Zoomed in 1m view
+        print(f"Run {run_idx} - Day 1min stats...")
+        filename = out_dir / f"run{run_idx:02d}_gen_compare_day_1min.png"
+        plot_pair(real_day_1m, synth_day_1m, title=f"Run {run_idx} - 1-Day Zoom (1min)", filename=str(filename))
 
     # Save run summaries
     try:
