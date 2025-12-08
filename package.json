@@ -7,7 +7,6 @@
     "frontend"
   ],
   "scripts": {
-    "install": "npm install --workspaces",
     "dev": "concurrently \"npm run dev:backend\" \"npm run dev:frontend\"",
     "dev:frontend": "cd frontend && npm run dev",
     "dev:backend": "cd api && python main.py",
