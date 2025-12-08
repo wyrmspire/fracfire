@@ -1,8 +1,10 @@
 import React, { useState, useEffect, useRef, useMemo, useCallback } from 'react';
 import { createRoot } from 'react-dom/client';
 import { GoogleGenAI, Type, FunctionDeclaration } from "@google/genai";
+import { RealBackend } from './backend-service';
+import './index.css';
 
-console.log("Initializing QuantAI Studio...");
+console.log("Initializing FracFire Studio...");
 
 /**
  * QUANT AI STUDIO
@@ -217,346 +219,8 @@ const resampleData = (data: OHLCV[], timeframeMinutes: number): OHLCV[] => {
 // 3. BACKEND SERVICE LAYER
 // =============================================================================
 
-class MockBackend {
-  stateRef: React.MutableRefObject<AppState>;
-  setState: React.Dispatch<React.SetStateAction<AppState>>;
-
-  // Using a ref for state allows the backend instance to remain stable (not re-instantiated)
-  // while still accessing the latest state. This prevents ChatAgent from resetting.
-  constructor(stateRef: React.MutableRefObject<AppState>, setState: React.Dispatch<React.SetStateAction<AppState>>) {
-    this.stateRef = stateRef;
-    this.setState = setState;
-  }
-
-  get state() {
-    return this.stateRef.current;
-  }
-
-  // --- Tools exposed to Agent ---
-
-  async fetchMarketData(symbol: string): Promise<string> {
-    console.log(`[BACKEND] Fetching Real Market Data for ${symbol} (YFinance Mode)`);
-    let newData: OHLCV[] = [];
-    const normalizedSymbol = symbol.toUpperCase();
-    
-    try {
-        const response = await fetch(`https://api.binance.com/api/v3/klines?symbol=${normalizedSymbol.includes('BTC') ? 'BTCUSDT' : 'ETHUSDT'}&interval=1m&limit=1000`);
-        if (response.ok) {
-            const raw = await response.json();
-            newData = raw.map((k: any) => ({
-                time: new Date(k[0]).toISOString(),
-                open: roundToTick(parseFloat(k[1])),
-                high: roundToTick(parseFloat(k[2])),
-                low: roundToTick(parseFloat(k[3])),
-                close: roundToTick(parseFloat(k[4])),
-                volume: parseFloat(k[5]),
-                original_symbol: normalizedSymbol
-            }));
-        } else {
-            throw new Error("Symbol not found on public feed");
-        }
-    } catch (e) {
-        console.warn("Falling back to generator for symbol:", symbol);
-        newData = generateMockData(normalizedSymbol, 1000, 2.5);
-    }
-
-    const newDataset: Dataset = {
-      id: `ds-real-${Date.now()}`,
-      name: `${normalizedSymbol} Real Market Data (1m)`,
-      source: 'REAL',
-      created: new Date(),
-      data: newData
-    };
-
-    this.setState(prev => ({
-      ...prev,
-      datasets: [...prev.datasets, newDataset],
-      activeDatasetId: newDataset.id
-    }));
-    return `Successfully fetched real market data for ${normalizedSymbol}. Dataset ID: ${newDataset.id}`;
-  }
-
-  async generatePriceData(symbol: string, bars: number, volatility: number): Promise<string> {
-    console.log(`[BACKEND] Running price_generator.py --symbol ${symbol} --bars ${bars}`);
-    await new Promise(r => setTimeout(r, 1000)); 
-    
-    const newData = generateMockData(symbol, bars, volatility);
-    const newDataset: Dataset = {
-      id: `ds-mock-${Date.now()}`,
-      name: `${symbol} Generated Data (${bars} bars)`,
-      source: 'MOCK',
-      created: new Date(),
-      data: newData
-    };
-
-    this.setState(prev => ({
-      ...prev,
-      datasets: [...prev.datasets, newDataset],
-      activeDatasetId: newDataset.id
-    }));
-    return `Successfully generated dataset ${newDataset.id} with ${bars} bars of ${symbol}.`;
-  }
-
-  async executeDataScript(scriptName: string, args: any): Promise<string> {
-      console.log(`[BACKEND] Executing script: ${scriptName}`);
-      console.log(`[BACKEND] Arguments:`, args);
-      await new Promise(r => setTimeout(r, 1500));
-      
-      const outputPath = args.output_path || args.output_file || 'data/output.json';
-      return `Script ${scriptName} executed successfully.\nProcessed data saved to: ${outputPath}\nSummary: Processed ${Object.keys(args).length} arguments.`;
-  }
-
-  async writeAndExecuteCode(code: string, filename: string): Promise<string> {
-      console.log(`[BACKEND] Writing custom code to ${filename}...`);
-      console.log("------------------------------------------------");
-      console.log(code);
-      console.log("------------------------------------------------");
-      console.log(`[BACKEND] Executing ${filename}...`);
-      await new Promise(r => setTimeout(r, 2000));
-      return `Successfully saved ${filename} and executed process.\nStandard Output: Process completed with exit code 0.`;
-  }
-
-  async trainModel(datasetId: string, modelType: string, epochs: number): Promise<string> {
-    console.log(`[BACKEND] Running train_model.py --data ${datasetId} --type ${modelType} --epochs ${epochs}`);
-    await new Promise(r => setTimeout(r, 2000)); 
-
-    const newModel: MLModel = {
-      id: `mdl-${Date.now()}`,
-      name: `${modelType.toUpperCase()} Model v${this.state.models.length + 1}`,
-      type: modelType,
-      status: 'ready',
-      accuracy: 0.85 + (Math.random() * 0.1),
-      datasetId
-    };
-
-    this.setState(prev => ({
-      ...prev,
-      models: [...prev.models, newModel],
-      activeModelId: newModel.id
-    }));
-
-    return `Model ${newModel.id} trained successfully with accuracy ${(newModel.accuracy * 100).toFixed(2)}%.`;
-  }
-
-  async trainCNN(tradeSetId: string, datasetId: string, epochs: number): Promise<string> {
-    console.log(`[BACKEND] Training CNN on TradeSet ${tradeSetId} using Dataset ${datasetId}`);
-    await new Promise(r => setTimeout(r, 2500));
-    
-    const tradeSet = this.state.tradeSets.find(ts => ts.id === tradeSetId);
-    if (!tradeSet) return "Error: Trade Set not found.";
-
-    const newModel: MLModel = {
-      id: `cnn-${Date.now()}`,
-      name: `CNN Strategy (trained on ${tradeSet.name})`,
-      type: 'CNN-Trade-Learner',
-      status: 'ready',
-      accuracy: 0.92, // High confidence for mock
-      datasetId: datasetId
-    };
-
-    this.setState(prev => ({
-        ...prev,
-        models: [...prev.models, newModel],
-        activeModelId: newModel.id
-    }));
-
-    return `CNN Model ${newModel.id} trained successfully on ${tradeSet.trades.length} manual trades.`;
-  }
-
-  async runCNNInference(modelId: string, targetDatasetId: string): Promise<string> {
-      console.log(`[BACKEND] Running CNN Inference --model ${modelId} --target ${targetDatasetId}`);
-      await new Promise(r => setTimeout(r, 2000));
-
-      const dataset = this.state.datasets.find(d => d.id === targetDatasetId);
-      if (!dataset) return "Error: Dataset not found";
-
-      // Mock Inference: Find setups similar to what a CNN might find
-      const newSetups: TradeSetup[] = [];
-      const data = dataset.data;
-      
-      for (let i = 50; i < data.length - 20; i += 75) {
-          const bar = data[i];
-          const type = Math.random() > 0.5 ? 'LONG' : 'SHORT';
-          const entry = bar.close;
-          const sl = roundToTick(type === 'LONG' ? entry * 0.998 : entry * 1.002);
-          const tp = roundToTick(type === 'LONG' ? entry * 1.004 : entry * 0.996);
-          
-          newSetups.push({
-              id: `cnn-signal-${Date.now()}-${i}`,
-              strategyId: `CNN-${modelId}`,
-              source: 'STRATEGY',
-              time: bar.time,
-              type,
-              entryPrice: entry,
-              stopLoss: sl,
-              takeProfit: tp,
-              confidence: 0.85 + Math.random() * 0.1,
-              modelUsed: modelId
-          });
-      }
-
-      const stratId = `CNN-${modelId}`;
-      const stratExists = this.state.strategies.find(s => s.id === stratId);
-      if (!stratExists) {
-          this.setState(prev => ({
-              ...prev,
-              strategies: [...prev.strategies, {
-                  id: stratId,
-                  name: `CNN Inference: ${modelId}`,
-                  description: 'AI Generated Setups based on trained CNN',
-                  created: new Date()
-              }]
-          }));
-      }
-
-      this.setState(prev => ({
-          ...prev,
-          setups: [...prev.setups, ...newSetups],
-          activeStrategyId: stratId,
-          activeDatasetId: targetDatasetId
-      }));
-
-      return `CNN Inference complete. Found ${newSetups.length} setups on dataset ${dataset.name}.`;
-  }
-
-  async createSetupStrategy(name: string, description: string): Promise<string> {
-    console.log(`[BACKEND] Creating setup strategy: ${name}`);
-    await new Promise(r => setTimeout(r, 500));
-
-    const newStrategy: SetupStrategy = {
-      id: `strat-${Date.now()}`,
-      name,
-      description,
-      created: new Date()
-    };
-
-    this.setState(prev => ({
-      ...prev,
-      strategies: [...prev.strategies, newStrategy],
-      activeStrategyId: newStrategy.id
-    }));
-
-    return `Setup strategy '${name}' created (ID: ${newStrategy.id}).`;
-  }
-
-  async runSetupAnalysis(strategyId: string, datasetId: string, riskReward: number): Promise<string> {
-    console.log(`[BACKEND] Running setup_analyzer.py --strategy ${strategyId} --data ${datasetId}`);
-    await new Promise(r => setTimeout(r, 1500));
-
-    const dataset = this.state.datasets.find(d => d.id === datasetId);
-    if (!dataset) return "Error: Dataset not found.";
-
-    const strategy = this.state.strategies.find(s => s.id === strategyId);
-    if (!strategy) return "Error: Strategy not found.";
-
-    const newSetups: TradeSetup[] = [];
-    const data = dataset.data;
-
-    // Simulation logic to find random setups on 1m data
-    for (let i = 20; i < data.length - 10; i += Math.floor(Math.random() * 50) + 20) {
-      const bar = data[i];
-      const type = Math.random() > 0.5 ? 'LONG' : 'SHORT';
-      const entryPrice = bar.close;
-      const dist = roundToTick((bar.high - bar.low) * 2); 
-      const stopLoss = roundToTick(type === 'LONG' ? entryPrice - dist : entryPrice + dist);
-      const takeProfit = roundToTick(type === 'LONG' ? entryPrice + (dist * riskReward) : entryPrice - (dist * riskReward));
-      
-      newSetups.push({
-        id: `setup-${Date.now()}-${i}`,
-        strategyId: strategyId,
-        source: 'STRATEGY',
-        time: bar.time,
-        type,
-        entryPrice,
-        stopLoss,
-        takeProfit,
-        confidence: Math.random(),
-        modelUsed: "Simulation"
-      });
-    }
-
-    this.setState(prev => ({
-      ...prev,
-      setups: [...prev.setups, ...newSetups],
-      activeStrategyId: strategyId 
-    }));
-
-    return `Analysis complete. Found ${newSetups.length} setups for strategy '${strategy.name}'.`;
-  }
-
-  // --- UI Helpers ---
-
-  uploadDataset(file: File) {
-    const reader = new FileReader();
-    reader.onload = (e) => {
-        try {
-            const json = JSON.parse(e.target?.result as string);
-            if (Array.isArray(json) && json[0].time && json[0].close) {
-                 const newDataset: Dataset = {
-                    id: `ds-upload-${Date.now()}`,
-                    name: file.name.replace('.json', ''),
-                    source: 'UPLOAD',
-                    created: new Date(),
-                    data: json
-                 };
-                 this.setState(prev => ({
-                    ...prev,
-                    datasets: [...prev.datasets, newDataset],
-                    activeDatasetId: newDataset.id
-                 }));
-            } else {
-                alert("Invalid JSON format. Expected array of OHLCV objects.");
-            }
-        } catch (err) {
-            alert("Error parsing JSON file.");
-        }
-    };
-    reader.readAsText(file);
-  }
-
-  addManualTrade(trade: TradeSetup, datasetId: string) {
-      this.setState(prev => {
-          let activeSet = prev.tradeSets.find(ts => ts.id === prev.activeTradeSetId);
-          let newSets = [...prev.tradeSets];
-          
-          if (!activeSet || activeSet.datasetId !== datasetId) {
-             const existing = newSets.find(ts => ts.datasetId === datasetId);
-             if (existing) {
-                 activeSet = existing;
-             } else {
-                 activeSet = {
-                     id: `ts-${Date.now()}`,
-                     name: `Manual Trades ${prev.tradeSets.length + 1}`,
-                     datasetId,
-                     created: new Date(),
-                     trades: []
-                 };
-                 newSets.push(activeSet);
-             }
-          }
-          
-          // Ensure we update the set properly in the array
-          const updatedSet = { ...activeSet, trades: [...activeSet.trades, trade] };
-          newSets = newSets.map(s => s.id === activeSet!.id ? updatedSet : s);
-          
-          return {
-              ...prev,
-              tradeSets: newSets,
-              activeTradeSetId: activeSet!.id
-          };
-      });
-  }
-
-  updateManualTrade(updatedTrade: TradeSetup) {
-    this.setState(prev => {
-        const newSets = prev.tradeSets.map(ts => ({
-            ...ts,
-            trades: ts.trades.map(t => t.id === updatedTrade.id ? updatedTrade : t)
-        }));
-        return { ...prev, tradeSets: newSets };
-    });
-  }
-}
+// RealBackend has been moved to backend-service.ts as RealBackend
+// The RealBackend connects to the FastAPI backend at localhost:8000
 
 // =============================================================================
 // 4. CHARTING ENGINE (React + Canvas)
@@ -1440,7 +1104,7 @@ const TradesPanel = ({ state, setState }: { state: AppState, setState: any }) =>
     );
 };
 
-const DataPanel = ({ state, setState, backend }: { state: AppState, setState: any, backend: MockBackend }) => (
+const DataPanel = ({ state, setState, backend }: { state: AppState, setState: any, backend: RealBackend }) => (
     <div className="p-6 h-full overflow-y-auto">
         <h2 className="text-2xl font-bold text-white mb-6">Data Management</h2>
         <div className="grid grid-cols-1 md:grid-cols-2 gap-6 mb-8">
@@ -1499,7 +1163,7 @@ const ModelsPanel = ({ state }: { state: AppState, setState: any }) => (
     </div>
 );
 
-const ChatAgent = ({ backend }: { backend: MockBackend }) => {
+const ChatAgent = ({ backend }: { backend: RealBackend }) => {
     const [messages, setMessages] = useState<{ role: 'user' | 'model'; text: string }[]>([]);
     const [input, setInput] = useState('');
     const [loading, setLoading] = useState(false);
@@ -1711,7 +1375,7 @@ const App = () => {
   const stateRef = useRef(state);
   useEffect(() => { stateRef.current = state; }, [state]);
 
-  const backend = useMemo(() => new MockBackend(stateRef, setState), []);
+  const backend = useMemo(() => new RealBackend(stateRef, setState), []);
 
   const handleRunAnalysis = (strategyId: string) => {
       if (!state.activeDatasetId) return;

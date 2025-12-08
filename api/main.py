@@ -83,22 +83,37 @@ async def generate_data(request: GenerateDataRequest):
     try:
         from src.core.generator import PriceGenerator
         from datetime import datetime, timedelta
+        import pandas as pd
         
         # Create generator
         gen = PriceGenerator(
             initial_price=5810.0,
-            seed=request.seed
+            seed=request.seed if request.seed else None
         )
         
+        # Calculate start date based on bars requested
+        # Assuming 1m bars, calculate how many days needed
+        bars_per_day = 1440  # 24 hours * 60 minutes
+        days_needed = max(1, (request.bars + bars_per_day - 1) // bars_per_day)
+        
         # Generate data
-        start_date = datetime.now() - timedelta(minutes=request.bars)
-        df = gen.generate_day(start_date, auto_transition=True)
+        all_data = []
+        for day_offset in range(days_needed):
+            start_date = datetime.now() - timedelta(days=days_needed - day_offset)
+            df = gen.generate_day(start_date, auto_transition=True)
+            all_data.append(df)
+        
+        # Combine all days
+        combined_df = pd.concat(all_data, ignore_index=True)
+        
+        # Limit to requested number of bars
+        combined_df = combined_df.head(request.bars)
         
         # Convert to OHLCV format
         data = []
-        for _, row in df.iterrows():
+        for _, row in combined_df.iterrows():
             data.append({
-                "time": row['time'].isoformat(),
+                "time": row['time'].isoformat() if hasattr(row['time'], 'isoformat') else str(row['time']),
                 "open": float(row['open']),
                 "high": float(row['high']),
                 "low": float(row['low']),
@@ -107,7 +122,7 @@ async def generate_data(request: GenerateDataRequest):
                 "original_symbol": request.symbol
             })
         
-        dataset_id = f"ds-{request.symbol}-{datetime.now().timestamp()}"
+        dataset_id = f"ds-{request.symbol}-{int(datetime.now().timestamp())}"
         
         # Save to file
         output_dir = root / "data" / "generated"
@@ -121,10 +136,12 @@ async def generate_data(request: GenerateDataRequest):
             "success": True,
             "dataset_id": dataset_id,
             "bars": len(data),
-            "data": data[:100]  # Return first 100 bars
+            "data": data
         }
     
     except Exception as e:
+        import traceback
+        traceback.print_exc()
         raise HTTPException(status_code=500, detail=str(e))
 
 @app.get("/api/data/datasets")
